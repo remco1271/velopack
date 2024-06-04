@@ -28,6 +28,7 @@ namespace Velopack.Json
 
     [JsonSerializable(typeof(List<GithubRelease>))]
     [JsonSerializable(typeof(List<GitlabRelease>))]
+    [JsonSerializable(typeof(List<GiteaRelease>))]
     [JsonSerializable(typeof(VelopackAssetFeed))]
 #if NET8_0_OR_GREATER
     [JsonSourceGenerationOptions(UseStringEnumConverter = true)]
@@ -62,6 +63,11 @@ namespace Velopack.Json
         public static List<GitlabRelease>? DeserializeGitlabReleaseList(string json)
         {
             return JsonSerializer.Deserialize(json, Context.ListGitlabRelease);
+        }
+
+        public static List<GiteaRelease>? DeserializeGiteaReleaseList(string json)
+        {
+            return JsonSerializer.Deserialize(json, Context.ListGiteaRelease);
         }
 
         public static VelopackAsset[]? DeserializeVelopackAssetArray(string json)
@@ -116,6 +122,11 @@ namespace Velopack.Json
         public static List<GitlabRelease>? DeserializeGitlabReleaseList(string json)
         {
             return JsonConvert.DeserializeObject<List<GitlabRelease>>(json, Options);
+        }
+
+        public static List<GiteaRelease>? DeserializeGiteaReleaseList(string json)
+        {
+            return JsonConvert.DeserializeObject<List<GiteaRelease>>(json, Options);
         }
 
         public static VelopackAsset[]? DeserializeVelopackAssetArray(string json)
