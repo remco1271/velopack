@@ -23,12 +23,12 @@ public class GiteaDownloadOptions : RepositoryOptions
 
     public string Token { get; set; }
 
-    /// <summary>
-    /// Example https://gitea.com
-    /// </summary>
-    public string ServerUrl { get; set; }
+    ///// <summary>
+    ///// Example https://gitea.com
+    ///// </summary>
+    //public string ServerUrl { get; set; }
 
-    public int ServerPort { get; set; }
+    //public int ServerPort { get; set; }
 }
 
 public class GiteaUploadOptions : GiteaDownloadOptions
@@ -79,7 +79,9 @@ public class GiteaRepository : SourceRepository<GiteaDownloadOptions, GiteaSourc
         // Setup Gitea config
         Configuration config = new Configuration();
         // Example: http://www.Gitea.com/api/v1
-        config.BasePath = options.ServerUrl + "/api/v1";
+        var uri = new Uri(options.RepoUrl);
+        var baseUri = uri.GetLeftPart(System.UriPartial.Authority);
+        config.BasePath = baseUri + "/api/v1";
 
         Log.Info($"Preparing to upload {build.Files.Count} asset(s) to Gitea");
 

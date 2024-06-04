@@ -21,7 +21,9 @@ public static partial class OptionMapper
     public static partial LinuxPackOptions ToOptions(this LinuxPackCommand cmd);
     public static partial OsxBundleOptions ToOptions(this OsxBundleCommand cmd);
     public static partial GitHubDownloadOptions ToOptions(this GitHubDownloadCommand cmd);
+    public static partial GiteaDownloadOptions ToOptions(this GiteaDownloadCommand cmd);
     public static partial GitHubUploadOptions ToOptions(this GitHubUploadCommand cmd);
+    public static partial GiteaUploadOptions ToOptions(this GiteaUploadCommand cmd);
     public static partial HttpDownloadOptions ToOptions(this HttpDownloadCommand cmd);
     public static partial LocalDownloadOptions ToOptions(this LocalDownloadCommand cmd);
     public static partial LocalUploadOptions ToOptions(this LocalUploadCommand cmd);
