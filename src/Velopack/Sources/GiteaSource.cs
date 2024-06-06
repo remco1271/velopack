@@ -127,14 +127,7 @@ namespace Velopack.Sources
         /// <returns></returns>
         protected virtual Uri GetApiBaseUrl(Uri repoUrl)
         {
-            Uri baseAddress;
-            if (repoUrl.Host.EndsWith("Gitea.com", StringComparison.OrdinalIgnoreCase)) {
-                baseAddress = new Uri("https://api.Gitea.com/api/v1/");
-            } else {
-                // if it's not Gitea.com, it's probably an diffrent server
-                // API location is http://internal.Gitea.server.local/api/v3
-                baseAddress = new Uri(string.Format("{0}{1}{2}/api/v1/", repoUrl.Scheme, Uri.SchemeDelimiter, repoUrl.Host));
-            }
+            Uri baseAddress = new Uri(string.Format("{0}{1}{2}/api/v1/", repoUrl.Scheme, Uri.SchemeDelimiter, repoUrl.Host));
             // above ^^ notice the end slashes for the baseAddress, explained here: http://stackoverflow.com/a/23438417/162694
             return baseAddress;
         }
