@@ -88,7 +88,7 @@ namespace Velopack.Sources
 
             const int perPage = 10;
             const int page = 1;
-            var releasesPath = $"repos{RepoUri.AbsolutePath}/releases?limit={perPage}&page={page}";
+            var releasesPath = $"repos{RepoUri.AbsolutePath}/releases?limit={perPage}&page={page}&draft=false";
             var baseUri = GetApiBaseUrl(RepoUri);
             var getReleasesUri = new Uri(baseUri, releasesPath);
             var response = await Downloader.DownloadString(getReleasesUri.ToString(), Authorization, "application/json").ConfigureAwait(false);
