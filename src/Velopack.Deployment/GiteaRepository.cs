@@ -102,9 +102,7 @@ public class GiteaRepository : SourceRepository<GiteaDownloadOptions, GiteaSourc
         }
         
         if (!options.Merge) {
-            ApiResponse<Release> httpInfo = await apiInstance.RepoGetReleaseByTagWithHttpInfoAsync(repoOwner, repoName, semVer.ToString());
-            // If a release with tag is found it will return 200, if not found it returns 404
-            if (httpInfo != null && httpInfo.StatusCode == HttpStatusCode.OK) {
+            if (existingReleases.Any(r => r.TagName == semVer.ToString())) {
                 throw new UserInfoException($"There is already an existing release tagged '{semVer}'. Please delete this release or provide a new version number.");
             }
             if (existingReleases.Any(r => r.Name == releaseName)) {
@@ -121,13 +119,14 @@ public class GiteaRepository : SourceRepository<GiteaDownloadOptions, GiteaSourc
                 throw new UserInfoException($"Found existing release matched by name ({release.Name} [{release.TagName}]), but tag name does not match ({semVer}).");
             Log.Info($"Found existing release ({release.Name} [{release.TagName}]). Merge flag is enabled.");
         } else {
-            var newReleaseReq = new CreateReleaseOption(semVer.ToString()) {
-                Body = releaseNotes,
-                Draft = true,
-                Prerelease = options.Prerelease,
-                Name = string.IsNullOrWhiteSpace(options.ReleaseName) ? semVer.ToString() : options.ReleaseName,
-                TargetCommitish = options.TargetCommitish,
-            };
+            var newReleaseReq = new CreateReleaseOption(
+                body: releaseNotes,
+                draft: true,
+                prerelease: options.Prerelease,
+                name: string.IsNullOrWhiteSpace(options.ReleaseName) ? semVer.ToString() : options.ReleaseName,
+                targetCommitish: options.TargetCommitish,
+                tagName: semVer.ToString()
+            );
             Log.Info($"Creating draft release titled '{newReleaseReq.Name}'");
             release = await apiInstance.RepoCreateReleaseAsync(repoOwner, repoName, newReleaseReq);
         }
@@ -165,14 +164,15 @@ public class GiteaRepository : SourceRepository<GiteaDownloadOptions, GiteaSourc
         if (options.Publish) {
             if (release.Draft) {
                 Log.Info("Converting draft to full published release.");
-                var body = new EditReleaseOption(); // EditReleaseOption? |  (optional)
-                body.Draft = false;
-                body.Prerelease = release.Prerelease;
-                body.Body = release.Body;
-                body.Name = release.Name;
-                body.TagName = release.TagName;
-                body.TargetCommitish = release.TargetCommitish;
-                Release result = apiInstance.RepoEditRelease(repoOwner, repoName, release.Id, body);
+                var body = new EditReleaseOption(
+                    release.Body,
+                    false, // Draft
+                    release.Name,
+                    release.Prerelease,
+                    release.TagName,
+                    release.TargetCommitish
+                    );
+                Release result = await apiInstance.RepoEditReleaseAsync(repoOwner, repoName, release.Id, body);
             } else {
                 Log.Info("Skipping publish, release is already not a draft.");
             }
