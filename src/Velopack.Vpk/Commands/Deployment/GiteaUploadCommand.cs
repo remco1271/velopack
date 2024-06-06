@@ -20,7 +20,7 @@ public class GiteaUploadCommand : GiteaBaseCommand
     public bool Merge { get; private set; }
 
     public GiteaUploadCommand()
-        : base("github", "Upload releases to a GitHub repository.")
+        : base("gitea", "Upload releases to a Gitea repository.")
     {
         AddOption<bool>((v) => Publish = v, "--publish")
             .SetDescription("Create and publish instead of leaving as draft.");
