@@ -21,11 +21,11 @@
           "System.Text.Json": "4.7.2"
         }
       },
-      "Gitea.Net": {
+      "Gitea.Net.API": {
         "type": "Direct",
-        "requested": "[1.0.1, )",
-        "resolved": "1.0.1",
-        "contentHash": "tz4kb4o4uhGeeyMYnsVUi7XrgDoNTzXv7C3pg1W+rYqU1reZ4WZ2TzmNmV1JhpFas9N1FmRaiJL8rljylq30NA==",
+        "requested": "[1.0.2, )",
+        "resolved": "1.0.2",
+        "contentHash": "Tamd6GHym7+fbaJRpwi8jfn0YEOiUOh7q/XLqZSmGx0FnDmKG6zwFN4r3j7oEx8rUgLBo/892qtxQ8GVu0ueOA==",
         "dependencies": {
           "JsonSubTypes": "2.0.1",
           "Microsoft.AspNetCore.SystemWebAdapters": "1.3.0",
