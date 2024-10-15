@@ -183,7 +183,7 @@ namespace Velopack
         //    return zp.IconUrl;
         //}
 
-        static readonly Regex entryRegex = new Regex(@"^([0-9a-fA-F]{40})\s+(\S+)\s+(\d+)[\r]*$");
+        static readonly Regex entryRegex = new Regex(@"^([0-9a-fA-F]{40})\s+(\S[\S ]*?)\s+(\d+)[\r]*$");
         static readonly Regex commentRegex = new Regex(@"\s*#.*$");
         static readonly Regex stagingRegex = new Regex(@"#\s+(\d{1,3})%$");
 
