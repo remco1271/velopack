@@ -5,13 +5,13 @@ namespace Velopack.Packaging.Windows;
 
 public static class SetupBundle
 {
-    private static readonly byte[] SquirrelBundleSignature = [
-        // 64 bytes represent the bundle signature: SHA-256 for "squirrel bundle"
-        0x94, 0xf0, 0xb1, 0x7b, 0x68, 0x93, 0xe0, 0x29,
-        0x37, 0xeb, 0x34, 0xef, 0x53, 0xaa, 0xe7, 0xd4,
-        0x2b, 0x54, 0xf5, 0x70, 0x7e, 0xf5, 0xd6, 0xf5,
-        0x78, 0x54, 0x98, 0x3e, 0x5e, 0x94, 0xed, 0x7d
-    ];
+    private readonly static byte[] SquirrelBundleSignature = [
+            // 64 bytes represent the bundle signature: SHA-256 for "squirrel bundle"
+            0x94, 0xf0, 0xb1, 0x7b, 0x68, 0x93, 0xe0, 0x29,
+            0x37, 0xeb, 0x34, 0xef, 0x53, 0xaa, 0xe7, 0xd4,
+            0x2b, 0x54, 0xf5, 0x70, 0x7e, 0xf5, 0xd6, 0xf5,
+            0x78, 0x54, 0x98, 0x3e, 0x5e, 0x94, 0xed, 0x7d
+        ];
 
     public static bool IsBundle(string setupPath, out long bundleOffset, out long bundleLength)
     {
@@ -61,6 +61,7 @@ public static class SetupBundle
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             // 8 bytes represent the package length
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
             .. SquirrelBundleSignature
         ];
 
@@ -69,14 +70,12 @@ public static class SetupBundle
         Array.Copy(BitConverter.GetBytes(bundleLength), 0, data, 8, 8);
 
         // replace the beginning of the placeholder with the bytes from 'data'
-        RetryOnIOError(
-            () =>
-                SearchAndReplace(setupPath, placeholder, data, pad0s: false));
+        RetryOnIOError(() =>
+            SearchAndReplace(setupPath, placeholder, data, pad0s: false));
 
         // memory-mapped write does not updating last write time
-        RetryOnIOError(
-            () =>
-                File.SetLastWriteTimeUtc(setupPath, DateTime.UtcNow));
+        RetryOnIOError(() =>
+            File.SetLastWriteTimeUtc(setupPath, DateTime.UtcNow));
 
         if (!IsBundle(setupPath, out var offset, out var length))
             throw new InvalidOperationException("Internal logic error writing setup bundle.");
@@ -85,10 +84,10 @@ public static class SetupBundle
     }
 
     internal static unsafe void SearchAndReplace(
-        MemoryMappedViewAccessor accessor,
-        byte[] searchPattern,
-        byte[] patternToReplace,
-        bool pad0s = true)
+       MemoryMappedViewAccessor accessor,
+       byte[] searchPattern,
+       byte[] patternToReplace,
+       bool pad0s = true)
     {
         byte* pointer = null;
 
@@ -126,15 +125,17 @@ public static class SetupBundle
         }
     }
 
-    public static void SearchAndReplace(
+    public static unsafe void SearchAndReplace(
         string filePath,
         byte[] searchPattern,
         byte[] patternToReplace,
         bool pad0s = true)
     {
-        using var mappedFile = MemoryMappedFile.CreateFromFile(filePath);
-        using var accessor = mappedFile.CreateViewAccessor();
-        SearchAndReplace(accessor, searchPattern, patternToReplace, pad0s);
+        using (var mappedFile = MemoryMappedFile.CreateFromFile(filePath)) {
+            using (var accessor = mappedFile.CreateViewAccessor()) {
+                SearchAndReplace(accessor, searchPattern, patternToReplace, pad0s);
+            }
+        }
     }
 
     public static unsafe int SearchInFile(MemoryMappedViewAccessor accessor, byte[] searchPattern)
@@ -143,11 +144,13 @@ public static class SetupBundle
         return KMPSearch(searchPattern, (byte*) safeBuffer.DangerousGetHandle(), (long) safeBuffer.ByteLength);
     }
 
-    public static int SearchInFile(string filePath, byte[] searchPattern)
+    public static unsafe int SearchInFile(string filePath, byte[] searchPattern)
     {
-        using var mappedFile = MemoryMappedFile.CreateFromFile(filePath, FileMode.Open, null, 0, MemoryMappedFileAccess.Read);
-        using var accessor = mappedFile.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read);
-        return SearchInFile(accessor, searchPattern);
+        using (var mappedFile = MemoryMappedFile.CreateFromFile(filePath, FileMode.Open, null, 0, MemoryMappedFileAccess.Read)) {
+            using (var accessor = mappedFile.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read)) {
+                return SearchInFile(accessor, searchPattern);
+            }
+        }
     }
 
     // See: https://en.wikipedia.org/wiki/Knuth%E2%80%93Morris%E2%80%93Pratt_algorithm
@@ -157,7 +160,6 @@ public static class SetupBundle
         if (pattern.Length >= 1) {
             table[0] = -1;
         }
-
         if (pattern.Length >= 2) {
             table[1] = 0;
         }
@@ -176,7 +178,6 @@ public static class SetupBundle
                 pos++;
             }
         }
-
         return table;
     }
 
@@ -192,7 +193,6 @@ public static class SetupBundle
                 if (i == pattern.Length - 1) {
                     return m;
                 }
-
                 i++;
             } else {
                 if (table[i] > -1) {
@@ -237,7 +237,8 @@ public static class SetupBundle
                 fileStream.Write(buf, 0, bytesRead);
                 pos += bytesRead;
             }
-        } while (true);
+        }
+        while (true);
     }
 
     public const int NumberOfRetries = 500;
@@ -300,7 +301,7 @@ public static class SetupBundle
                 func();
                 break;
             } catch (HResultException hrex)
-                when (i < NumberOfRetries && !IsKnownIrrecoverableError(hrex.Win32HResult)) {
+                  when (i < NumberOfRetries && !IsKnownIrrecoverableError(hrex.Win32HResult)) {
                 Thread.Sleep(NumMilliSecondsToWait);
             }
         }
@@ -309,7 +310,6 @@ public static class SetupBundle
     public class HResultException : Exception
     {
         public readonly int Win32HResult;
-
         public HResultException(int hResult) : base(hResult.ToString("X4"))
         {
             Win32HResult = hResult;
