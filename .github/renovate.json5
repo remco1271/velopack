@@ -5,7 +5,7 @@
     ":semanticCommitsDisabled"
   ],
   "labels": ["renovate"],
-  "schedule": ["on friday before 11am"],
+  "schedule": ["on friday"],
   "timezone": "Europe/London",
   "ignorePaths": [
     "**/node_modules/**",
@@ -23,37 +23,37 @@
   // https://docs.renovatebot.com/key-concepts/automerge
   "packageRules": [
     {
-      "groupName": "rust deps",
+      "groupName": "rust crates",
       "matchDatasources": "crate",
       "matchFileNames": ["Cargo.toml", "src/**"]
     },
     {
-      "groupName": "npm deps",
+      "groupName": "npm packages",
       "matchDatasources": "npm",
       "matchFileNames": ["src/**"]
     },
     {
-      "groupName": "dotnet deps",
+      "groupName": "dotnet packages",
       "matchDatasources": "nuget",
       "matchFileNames": ["src/**", "test/**"]
     },
     // samples
     {
-      "groupName": "sample rust deps",
+      "groupName": "sample rust crates",
       "matchDatasources": "crate",
       "matchFileNames": ["samples/**"],
       "separateMajorMinor": false,
       "automerge": true
     },
     {
-      "groupName": "sample dotnet deps",
+      "groupName": "sample dotnet packages",
       "matchDatasources": "nuget",
       "matchFileNames": ["samples/**"],
       "separateMajorMinor": false,
       "automerge": true
     },
     {
-      "groupName": "sample js deps",
+      "groupName": "sample js packages",
       "matchDatasources": "npm",
       "matchFileNames": ["samples/**"],
       "separateMajorMinor": false,
@@ -61,18 +61,14 @@
     },
     // troublesome/frozen packages
     {
-      "groupName": "winsafe",
-      "matchPackageNames": "winsafe",
-      "dependencyDashboardApproval": true
-    },
-    {
-      "groupName": "system commandline",
-      "matchPackageNames": "System.CommandLine",
-      "dependencyDashboardApproval": true
-    },
-    {
-      "groupName": "msft logging",
-      "matchPackageNames": "Microsoft.Extensions.Logging.Abstractions",
+      "groupName": "frozen",
+      "matchPackageNames": [
+        "winsafe",                                    // newer versions causes runtime errors in release builds
+        "System.CommandLine",                         // too many breaking changes too frequently
+        "Microsoft.Extensions.Logging.Abstractions",  // we have multiple versions of this
+        "@vercel/webpack-asset-relocator-loader",     // an update was incompatible with electron
+        "xunit.runner.visualstudio"                   // 20-12-2024: broke tests (something about sn signing maybe?)
+      ],
       "dependencyDashboardApproval": true
     },
     {

@@ -25,6 +25,107 @@
         }
     }
 
+    private static string GetBasicCTypeInRust(Dictionary<string, string> nameMap, string rustType)
+    {
+        switch (rustType) {
+        case "PathBuf":
+        case "String":
+            return "*mut c_char";
+        case "bool":
+            return "bool";
+        case "i32":
+            return "i32";
+        case "i64":
+            return "i64";
+        case "u32":
+            return "u32";
+        case "u64":
+            return "u64";
+        default:
+            if (nameMap.TryGetValue(rustType, out var type)) {
+                return type;
+            }
+
+            throw new NotSupportedException("Unsupported type for rust-c: " + rustType);
+        }
+    }
+
+    public static void WriteRustCRepr(Dictionary<string, string> nameMap, IndentStringBuilder sb, RustStruct rs)
+    {
+        var cName = nameMap[rs.Name];
+        sb.AppendLine("#[rustfmt::skip]");
+        sb.AppendLine($"#[repr(C)]");
+        sb.AppendDocComment(rs.DocComment);
+        sb.AppendLine($"pub struct {cName} {{");
+        using (sb.Indent()) {
+            foreach (var field in rs.Fields) {
+                sb.AppendDocComment(field.DocComment);
+                sb.AppendLine($"pub {field.Name}: {GetBasicCTypeInRust(nameMap, field.Type)},");
+            }
+        }
+
+        sb.AppendLine("}");
+        sb.AppendLine();
+
+        sb.AppendLine("#[rustfmt::skip]");
+        sb.AppendLine($"pub fn c_to_{rs.Name.ToLower()}(obj: &{cName}) -> {rs.Name} {{");
+        using (sb.Indent()) {
+            // sb.AppendLine($"let obj = unsafe {{ &*obj }};");
+            sb.AppendLine($"{rs.Name} {{");
+            using (sb.Indent()) {
+                foreach (var field in rs.Fields) {
+                    if (field.Optional || field.Type == "PathBuf" || field.Type == "String" || nameMap.ContainsKey(field.Type)) {
+                        sb.AppendLine($"{field.Name}: c_to_{field.Type.ToLower()}{(field.Optional ? "_opt": "")}({(nameMap.ContainsKey(field.Type) ? "&" : "")}obj.{field.Name}),");
+                    } else {
+                        sb.AppendLine($"{field.Name}: obj.{field.Name},");
+                    }
+                }
+            }
+            sb.AppendLine("}");
+        }
+        sb.AppendLine("}");
+        sb.AppendLine();
+        
+        sb.AppendLine("#[rustfmt::skip]");
+        sb.AppendLine($"pub fn c_to_{rs.Name.ToLower()}_opt(obj: *mut {cName}) -> Option<{rs.Name}> {{");
+        using (sb.Indent()) {
+            sb.AppendLine("if obj.is_null() { return None; }");
+            sb.AppendLine($"Some(c_to_{rs.Name.ToLower()}(unsafe {{ &*obj }}))");
+        }
+        sb.AppendLine("}");
+        sb.AppendLine();
+        
+        sb.AppendLine("#[rustfmt::skip]");
+        sb.AppendLine($"pub unsafe fn allocate_{rs.Name.ToLower()}(dto: {rs.Name}, obj: *mut {cName}) {{");
+        using (sb.Indent()) {
+            sb.AppendLine("if obj.is_null() { return; }");
+            sb.AppendLine($"log::debug!(\"{cName} allocated\");");
+            foreach (var field in rs.Fields) {
+                if (field.Optional || field.Type == "PathBuf" || field.Type == "String" || nameMap.ContainsKey(field.Type)) {
+                    sb.AppendLine($"allocate_{field.Type.ToLower()}{(field.Optional ? "_opt": "")}(dto.{field.Name}, &mut (*obj).{field.Name});");
+                } else {
+                    sb.AppendLine($"(*obj).{field.Name} = dto.{field.Name};");
+                }
+            }
+        }
+        sb.AppendLine("}");
+        sb.AppendLine();
+        
+        sb.AppendLine("#[rustfmt::skip]");
+        sb.AppendLine($"pub unsafe fn free_{rs.Name.ToLower()}(obj: *mut {cName}) {{");
+        using (sb.Indent()) {
+            sb.AppendLine("if obj.is_null() { return; }");
+            sb.AppendLine($"log::debug!(\"{cName} freed\");");
+            foreach (var field in rs.Fields) {
+                if (field.Optional || field.Type == "PathBuf" || field.Type == "String" || nameMap.ContainsKey(field.Type)) {
+                    sb.AppendLine($"free_{field.Type.ToLower()}(&mut (*obj).{field.Name});");
+                }
+            }
+        }
+        sb.AppendLine("}");
+        sb.AppendLine();
+    }
+
     private static string GetCPlusPlusType(string[] coreTypes, string rustType, bool optional)
     {
         string type = rustType switch {
@@ -100,6 +201,7 @@
                         : $"pDto->{field.Name} = bridgeDto.{field.Name};");
             }
         }
+
         sb.AppendLine($"}}");
         sb.AppendLine();
 
@@ -115,6 +217,7 @@
                 }
             }
         }
+
         sb.AppendLine($"}}");
         sb.AppendLine();
     }
@@ -122,7 +225,7 @@
     public static void WriteBasicC(Dictionary<string, string> nameMap, IndentStringBuilder sb, RustStruct rs)
     {
         sb.AppendDocComment(rs.DocComment);
-        sb.AppendLine($"typedef struct {{");
+        sb.AppendLine($"typedef struct {nameMap[rs.Name]} {{");
         foreach (var field in rs.Fields) {
             using (sb.Indent()) {
                 sb.AppendDocComment(field.DocComment);
@@ -134,21 +237,8 @@
         sb.AppendLine();
     }
 
-    public static void WriteCPlusPlus(Dictionary<string, string> nameMap, IndentStringBuilder sb, RustStruct rs)
+    public static void WriteC2CPPMapping(Dictionary<string, string> nameMap, IndentStringBuilder sb, RustStruct rs)
     {
-        var coreTypes = nameMap.Keys.ToArray();
-        sb.AppendDocComment(rs.DocComment);
-        sb.AppendLine($"struct {rs.Name} {{");
-        foreach (var field in rs.Fields) {
-            using (sb.Indent()) {
-                sb.AppendDocComment(field.DocComment);
-                sb.AppendLine($"{GetCPlusPlusType(coreTypes, field.Type, field.Optional)} {field.Name};");
-            }
-        }
-
-        sb.AppendLine($"}};");
-        sb.AppendLine();
-
         sb.AppendLine($"static inline {nameMap[rs.Name]} to_c(const {rs.Name}& dto) {{");
         using (sb.Indent()) {
             sb.AppendLine("return {");
@@ -187,6 +277,22 @@
         }
 
         sb.AppendLine($"}}");
+        sb.AppendLine();
+    }
+
+    public static void WriteCPlusPlus(Dictionary<string, string> nameMap, IndentStringBuilder sb, RustStruct rs)
+    {
+        var coreTypes = nameMap.Keys.ToArray();
+        sb.AppendDocComment(rs.DocComment);
+        sb.AppendLine($"struct {rs.Name} {{");
+        foreach (var field in rs.Fields) {
+            using (sb.Indent()) {
+                sb.AppendDocComment(field.DocComment);
+                sb.AppendLine($"{GetCPlusPlusType(coreTypes, field.Type, field.Optional)} {field.Name};");
+            }
+        }
+
+        sb.AppendLine($"}};");
         sb.AppendLine();
     }
 

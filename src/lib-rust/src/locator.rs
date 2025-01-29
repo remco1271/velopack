@@ -3,6 +3,7 @@ use semver::Version;
 use crate::{
     bundle::{self, Manifest},
     util, Error,
+    lockfile::LockFile
 };
 
 /// Returns the default channel name for the current OS.
@@ -23,7 +24,7 @@ pub fn default_log_location(context: LocationContext) -> PathBuf {
         if let Ok(locator) = auto_locate_app_manifest(context) {
             return locator.get_root_dir().join("Velopack.log");
         }
-        
+
         warn!("Could not auto-locate app manifest, writing log to current directory.");
 
         // If we can't locate the current app, we write to the current directory.
@@ -149,7 +150,7 @@ impl VelopackLocator {
     pub fn get_temp_dir_root(&self) -> PathBuf {
         self.paths.PackagesDir.join("VelopackTemp")
     }
-    
+
     /// Get the name of a new temporary directory inside get_temp_dir_root() with a random 16-character suffix.
     pub fn get_temp_dir_rand16(&self) -> PathBuf {
         self.get_temp_dir_root().join("tmp_".to_string() + &util::random_string(16))
@@ -199,7 +200,7 @@ impl VelopackLocator {
     pub fn get_current_bin_dir_as_string(&self) -> String {
         Self::path_as_string(&self.paths.CurrentBinaryDir)
     }
-    
+
     /// Returns a clone of the current app's manifest.
     pub fn get_manifest(&self) -> Manifest {
         self.manifest.clone()
@@ -221,7 +222,7 @@ impl VelopackLocator {
         let ver = &self.manifest.version;
         format!("{}.{}.{}", ver.major, ver.minor, ver.patch)
     }
-    
+
     /// Returns the current app package channel.
     pub fn get_manifest_channel(&self) -> String {
         self.manifest.channel.clone()
@@ -273,6 +274,17 @@ impl VelopackLocator {
     /// Returns whether the app is portable or installed.
     pub fn get_is_portable(&self) -> bool {
         self.paths.IsPortable
+    }
+    
+    /// Attemps to open / lock a file in the app's package directory for exclusive write access.
+    /// Fails immediately if the lock cannot be acquired.
+    pub fn try_get_exclusive_lock(&self) -> Result<LockFile, Error> {
+        info!("Attempting to acquire exclusive lock on packages directory (non-blocking)...");
+        let packages_dir = self.get_packages_dir();
+        std::fs::create_dir_all(&packages_dir)?;
+        let lock_file_path = packages_dir.join(".velopack_lock");
+        let lock_file = LockFile::try_acquire_lock(&lock_file_path)?;
+        Ok(lock_file)
     }
 
     fn path_as_string(path: &PathBuf) -> String {
@@ -327,6 +339,7 @@ pub enum LocationContext
 #[cfg(target_os = "windows")]
 /// Automatically locates the current app's important paths. If the app is not installed, it will return an error.
 pub fn auto_locate_app_manifest(context: LocationContext) -> Result<VelopackLocator, Error> {
+    info!("Auto-locating app manifest...");
     match context {
         LocationContext::Unknown => {
             warn!("Unknown location context, trying to auto-locate from current exe location...");
@@ -391,7 +404,7 @@ pub fn auto_locate_app_manifest(context: LocationContext) -> Result<VelopackLoca
     match context {
         LocationContext::FromSpecifiedRootDir(dir) => search_path = dir.join("dummy"),
         LocationContext::FromSpecifiedAppExecutable(exe) => search_path = exe,
-        _ => {},
+        _ => {}
     }
 
     let search_string = search_path.to_string_lossy();
@@ -409,11 +422,24 @@ pub fn auto_locate_app_manifest(context: LocationContext) -> Result<VelopackLoca
         return Err(Error::MissingUpdateExe);
     }
 
+    let appimage_path = match std::env::var("APPIMAGE") {
+        Ok(v) => {
+            if v.is_empty() || !PathBuf::from(&v).exists() {
+                return Err(Error::NotInstalled("The 'APPIMAGE' environment variable should point to the current AppImage path.".to_string()));
+            } else {
+                v
+            }
+        },
+        Err(_) => {
+            return Err(Error::NotInstalled("The 'APPIMAGE' environment variable should point to the current AppImage path.".to_string()));
+        }
+    };
+    
     let app = read_current_manifest(&metadata_path)?;
     let packages_dir = PathBuf::from("/var/tmp/velopack").join(&app.id).join("packages");
 
     let config = VelopackLocatorConfig {
-        RootAppDir: root_app_dir,
+        RootAppDir: PathBuf::from(appimage_path),
         UpdateExePath: update_exe_path,
         PackagesDir: packages_dir,
         ManifestPath: metadata_path,
@@ -431,9 +457,9 @@ pub fn auto_locate_app_manifest(context: LocationContext) -> Result<VelopackLoca
     match context {
         LocationContext::FromSpecifiedRootDir(dir) => search_path = dir.join("dummy"),
         LocationContext::FromSpecifiedAppExecutable(exe) => search_path = exe,
-        _ => {},
+        _ => {}
     }
-    
+
     let search_string = search_path.to_string_lossy();
     let idx = search_string.rfind(".app/");
     if idx.is_none() {
@@ -469,14 +495,14 @@ pub fn auto_locate_app_manifest(context: LocationContext) -> Result<VelopackLoca
         CurrentBinaryDir: contents_dir,
         IsPortable: true,
     };
-    
+
     config_to_locator(&config)
 }
 
 fn read_current_manifest(nuspec_path: &PathBuf) -> Result<Manifest, Error> {
     if nuspec_path.exists() {
-        if let Ok(nuspec) = util::retry_io(|| std::fs::read_to_string(&nuspec_path)) {
-            return Ok(bundle::read_manifest_from_string(&nuspec)?);
+        if let Ok(nuspec) = util::retry_io(|| std::fs::read_to_string(nuspec_path)) {
+            return bundle::read_manifest_from_string(&nuspec);
         }
     }
     Err(Error::MissingNuspec)
@@ -489,16 +515,15 @@ pub fn find_latest_full_package(packages_dir: &PathBuf) -> Option<(PathBuf, Mani
     info!("Attempting to auto-detect package in: {}", packages_dir);
     let mut package: Option<(PathBuf, Manifest)> = None;
 
-    if let Ok(paths) = glob::glob(format!("{}/*.nupkg", packages_dir).as_str()) {
-        for path in paths {
-            if let Ok(path) = path {
-                trace!("Checking package: '{}'", path.to_string_lossy());
-                if let Ok(mut bun) = bundle::load_bundle_from_file(&path) {
-                    if let Ok(mani) = bun.read_manifest() {
-                        if package.is_none() || mani.version > package.clone().unwrap().1.version {
-                            info!("Found {}: '{}'", mani.version, path.to_string_lossy());
-                            package = Some((path, mani));
-                        }
+    let search_glob = format!("{}/*.nupkg", packages_dir);
+    if let Ok(paths) = glob::glob(search_glob.as_str()) {
+        for path in paths.into_iter().flatten() {
+            trace!("Checking package: '{}'", path.to_string_lossy());
+            if let Ok(mut bun) = bundle::load_bundle_from_file(&path) {
+                if let Ok(mani) = bun.read_manifest() {
+                    if package.is_none() || mani.version > package.clone()?.1.version {
+                        info!("Found {}: '{}'", mani.version, path.to_string_lossy());
+                        package = Some((path, mani));
                     }
                 }
             }

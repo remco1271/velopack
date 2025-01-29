@@ -1,8 +1,10 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using System.Runtime.Versioning;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using Velopack.Compression;
+using Velopack.Core;
+using Velopack.Core.Abstractions;
 using Velopack.NuGet;
-using Velopack.Packaging.Abstractions;
-using Velopack.Packaging.Exceptions;
 using Velopack.Util;
 using Velopack.Windows;
 
@@ -17,12 +19,14 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
 
     protected override Task CodeSign(Action<int> progress, string packDir)
     {
+        Regex fileExcludeRegex = Options.SignExclude != null ? new Regex(Options.SignExclude) : null;
         var filesToSign = new DirectoryInfo(packDir).GetAllFilesRecursively()
-            .Where(x => Options.SignSkipDll ? PathUtil.PathPartEndsWith(x.Name, ".exe") : PathUtil.FileIsLikelyPEImage(x.Name))
+            .Where(x => !fileExcludeRegex?.IsMatch(x.FullName) ?? PathUtil.FileIsLikelyPEImage(x.Name))
             .Select(x => x.FullName)
             .ToArray();
 
         SignFilesImpl(Options, progress, filesToSign);
+
         return Task.CompletedTask;
     }
 
@@ -56,9 +60,9 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         if (clickonceManifests.Any()) {
             foreach (var manifest in clickonceManifests) {
                 Log.Warn(
-                    $"Clickonce manifest found in pack directory: '{Path.GetFileName(manifest)}'. " +
-                    $"Velopack does not support building clickonce applications, and so will delete this file automatically. " +
-                    $"It is recommended that you remove clickonce from your .csproj to avoid this warning.");
+                    $"ClickOnce manifest found in pack directory: '{Path.GetFileName(manifest)}'. " +
+                    $"Velopack does not support building ClickOnce applications, and so will delete this file automatically. " +
+                    $"It is recommended that you remove ClickOnce from your .csproj to avoid this warning.");
                 File.Delete(manifest);
             }
         }
@@ -87,7 +91,7 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
             return null;
 
         try {
-            var shortcuts = Options.Shortcuts.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+            var shortcuts = Options.Shortcuts.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries)
                 .Select(x => x.Trim())
                 .Select(x => (ShortcutLocation) Enum.Parse(typeof(ShortcutLocation), x, true))
                 .ToList();
@@ -112,7 +116,7 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
             return "";
 
         var providedRuntimes = Options.Runtimes.ToLower()
-                .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries);
 
         var valid = new string[] {
             "webview2",
@@ -131,6 +135,9 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
             "vcredist143-x86",
             "vcredist143-x64",
             "vcredist143-arm64",
+            "vcredist144-x86",
+            "vcredist144-x64",
+            "vcredist144-arm64",
             "net45",
             "net451",
             "net452",
@@ -144,7 +151,7 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
             "net481",
         };
 
-        List<string> validated = new();
+        List<string> validated = [];
 
         foreach (var str in providedRuntimes) {
             if (valid.Contains(str)) {
@@ -161,7 +168,8 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
             }
 #pragma warning restore CS0618 // Type or member is obsolete
 
-            throw new UserInfoException($"The framework/runtime dependency '{str}' is not valid. See https://github.com/velopack/velopack/blob/master/docs/bootstrapping.md");
+            throw new UserInfoException(
+                $"The framework/runtime dependency '{str}' is not valid. See https://docs.velopack.io/packaging/bootstrapping");
         }
 
         foreach (var str in validated) {
@@ -182,6 +190,7 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         if (Options.Icon != null) {
             editor.SetExeIcon(Options.Icon);
         }
+
         editor.Commit();
 
         progress(25);
@@ -192,6 +201,7 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         SignFilesImpl(Options, CoreUtil.CreateProgressDelegate(progress, 50, 100), targetSetupExe);
         Log.Debug($"Setup bundle created '{Path.GetFileName(targetSetupExe)}'.");
         progress(100);
+
         return Task.CompletedTask;
     }
 
@@ -206,7 +216,8 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         File.Delete(Path.Combine(current.FullName, "Squirrel.exe"));
 
         // move the stub to the root of the portable package
-        var stubPath = Path.Combine(current.FullName,
+        var stubPath = Path.Combine(
+            current.FullName,
             Path.GetFileNameWithoutExtension(Options.EntryExecutableName) + "_ExecutionStub.exe");
         var stubName = (Options.PackTitle ?? Options.PackId) + ".exe";
         File.Move(stubPath, Path.Combine(dir.FullName, stubName));
@@ -247,9 +258,10 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         var signParams = options.SignParameters;
         var signTemplate = options.SignTemplate;
         var signParallel = options.SignParallel;
+        var trustedSignMetadataPath = options.AzureTrustedSignFile;
         var helper = new CodeSign(Log);
 
-        if (string.IsNullOrEmpty(signParams) && string.IsNullOrEmpty(signTemplate)) {
+        if (string.IsNullOrEmpty(signParams) && string.IsNullOrEmpty(signTemplate) && string.IsNullOrEmpty(trustedSignMetadataPath)) {
             Log.Warn($"No signing parameters provided, {filePaths.Length} file(s) will not be signed.");
             return;
         }
@@ -261,16 +273,55 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         // signtool.exe does not work if we're not on windows.
         if (!VelopackRuntimeInfo.IsWindows) return;
 
-        if (!string.IsNullOrEmpty(signParams)) {
+        if (!string.IsNullOrEmpty(trustedSignMetadataPath)) {
+            Log.Info($"Use Azure Trusted Signing service for code signing. Metadata file path: {trustedSignMetadataPath}");
+
+            string dlibPath = GetDlibPath(CancellationToken.None);
+            signParams = $"/fd SHA256 /tr http://timestamp.acs.microsoft.com /v /debug /td SHA256 /dlib {HelperFile.AzureDlibFileName} /dmdf \"{trustedSignMetadataPath}\"";
+            helper.Sign(filePaths, signParams, signParallel, progress, false);
+        } else if (!string.IsNullOrEmpty(signParams)) {
             helper.Sign(filePaths, signParams, signParallel, progress, false);
         }
     }
 
+    [SupportedOSPlatform("windows")]
+    private string GetDlibPath(CancellationToken cancellationToken)
+    {
+        // DLib library is required for Azure Trusted Signing. It must be in the same directory as SignTool.exe.
+        // https://learn.microsoft.com/azure/trusted-signing/how-to-signing-integrations#download-and-install-the-trusted-signing-dlib-package
+        var signToolPath = HelperFile.SignToolPath;
+        var signToolDirectory = Path.GetDirectoryName(signToolPath);
+        var dlibPath = Path.Combine(signToolDirectory, HelperFile.AzureDlibFileName);
+        if (File.Exists(dlibPath)) {
+            return dlibPath;
+        }
+
+        throw new NotSupportedException("Azure Trusted Signing is not supported in this version of Velopack.");
+
+        // Log.Info($"Downloading Azure Trusted Signing dlib to '{dlibPath}'");
+        // var dl = new NuGetDownloader();
+        //
+        // using MemoryStream nupkgStream = new();
+        // await dl.DownloadPackageToStream("Microsoft.Trusted.Signing.Client", "1.*", nupkgStream, cancellationToken);
+        //
+        // nupkgStream.Position = 0;
+        //
+        // string parentDir = NugetUtil.BinDirectory + Path.AltDirectorySeparatorChar + "x64" + Path.AltDirectorySeparatorChar;
+        //
+        // ZipArchive zipPackage = new(nupkgStream);
+        // var entries = zipPackage.Entries.Where(x => x.FullName.StartsWith(parentDir, StringComparison.OrdinalIgnoreCase));
+        // foreach (var entry in entries) {
+        //     var relativePath = entry.FullName.Substring(parentDir.Length);
+        //     entry.ExtractToFile(Path.Combine(signToolDirectory, relativePath), true);
+        // }
+        // return dlibPath;
+    }
+
     protected override string[] GetMainExeSearchPaths(string packDirectory, string mainExeName)
     {
-        return new[] {
+        return [
             Path.Combine(packDirectory, mainExeName),
             Path.Combine(packDirectory, mainExeName) + ".exe",
-        };
+        ];
     }
 }

@@ -1,6 +1,7 @@
 ﻿
 using System.CommandLine;
 using Velopack.Vpk.Commands;
+using Velopack.Vpk.Commands.Packaging;
 
 namespace Velopack.CommandLine.Tests.Commands;
 
@@ -264,14 +265,14 @@ public class PackWindowsCommandTests : ReleaseCommandTests<WindowsPackCommand>
     }
 
     [WindowsOnlyFact]
-    public void SignSkipDll_BareOption_SetsFlag()
+    public void SignExclude_WithPattern_SetsOption()
     {
         var command = new WindowsPackCommand();
 
-        string cli = GetRequiredDefaultOptions() + "--signSkipDll";
+        string cli = GetRequiredDefaultOptions() + @"--signExclude \.dll$";
         ParseResult parseResult = command.ParseAndApply(cli);
 
-        Assert.True(command.SignSkipDll);
+        Assert.Equal(@"\.dll$", command.SignExclude);
     }
 
     [WindowsOnlyFact]

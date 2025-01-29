@@ -47,8 +47,6 @@ public class PackTask : MSBuildAsyncTask
 
     public string? Channel { get; set; }
 
-    public bool PackIsAppDir { get; set; }
-
     public string? Exclude { get; set; }
 
     public bool NoPortable { get; private set; }
@@ -82,8 +80,9 @@ public class PackTask : MSBuildAsyncTask
     public bool SkipVelopackAppCheck { get; set; }
 
     public string? SignParameters { get; set; }
+    public string? AzureTrustedSignFile { get; set; }
 
-    public bool SignSkipDll { get; set; }
+    public string? SignExclude { get; set; }
 
     public int SignParallel { get; set; } = 10;
 

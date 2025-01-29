@@ -1,19 +1,18 @@
+extern crate cbindgen;
+
+use std::env;
+
 fn main() {
-    cxx_build::bridge("src/lib.rs")
-        .file("src/bridge.cc")
-        .warnings_into_errors(true)
-        .flag_if_supported("/std:c++17")
-        .flag_if_supported("/EHsc") // exception unwind handling
-        .flag_if_supported("-Wno-unused-function") // allow unused functions
-        .define("VELOPACK_LIBC_EXPORTS", Some("1"))
-        .std("c++17")
-        .compile("velopack_libc");
-
-    println!("cargo:rerun-if-changed=include/Velopack.h");
-    println!("cargo:rerun-if-changed=src/lib.rs");
-    println!("cargo:rerun-if-changed=src/bridge.hpp");
-    println!("cargo:rerun-if-changed=src/bridge.cc");
-
-    #[cfg(target_os = "windows")]
-    println!("cargo:rustc-link-arg=/WHOLEARCHIVE:velopack_libc.lib");
+    let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    cbindgen::Builder::new()
+      .with_crate(crate_dir)
+      .with_documentation(true)
+      .with_language(cbindgen::Language::C)
+      .with_autogen_warning("/* THIS FILE IS AUTO-GENERATED - DO NOT EDIT */")
+      .with_include_guard("VELOPACK_H")
+      .with_cpp_compat(true)
+      .with_include_version(true)
+      .generate()
+      .expect("Unable to generate bindings")
+      .write_to_file("include/Velopack.h");
 }

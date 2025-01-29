@@ -81,7 +81,6 @@
 mod app;
 mod manager;
 mod util;
-mod bindetect;
 
 /// Utility functions for loading and working with Velopack bundles and manifests.
 pub mod bundle;
@@ -101,6 +100,9 @@ pub mod sources;
 /// Functions to patch files and reconstruct Velopack delta packages.
 pub mod delta;
 
+/// Acquire and manage file-system based lock files.
+pub mod lockfile;
+
 pub use app::*;
 pub use manager::*;
 
@@ -113,8 +115,6 @@ pub enum NetworkError
 {
     #[error("Http error: {0}")]
     Http(#[from] ureq::Error),
-    #[error("Tls error: {0}")]
-    Tls(#[from] native_tls::Error),
     #[error("Url error: {0}")]
     Url(#[from] url::ParseError),
 }
@@ -156,11 +156,5 @@ impl From<url::ParseError> for Error {
 impl From<ureq::Error> for Error {
     fn from(err: ureq::Error) -> Self {
         Error::Network(Box::new(NetworkError::Http(err)))
-    }
-}
-
-impl From<native_tls::Error> for Error {
-    fn from(err: native_tls::Error) -> Self {
-        Error::Network(Box::new(NetworkError::Tls(err)))
     }
 }

@@ -62,22 +62,28 @@ file-rotate.workspace = true
 wait-timeout.workspace = true
 pretty-bytes-rust.workspace = true
 enum-flags.workspace = true
+log-panics.workspace = true
 
-[target.'cfg(unix)'.dependencies]
-native-dialog.workspace = true
+[target.'cfg(target_os="linux")'.dependencies]
 waitpid-any.workspace = true
 dialog.workspace = true
 libc.workspace = true
+
+[target.'cfg(target_os="macos")'.dependencies]
+core-foundation.workspace = true
+core-foundation-sys.workspace = true
+waitpid-any.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 fs_extra.workspace = true
 memmap2.workspace = true
 image.workspace = true
-winsafe = { version = "0.0.20", features = ["gui"] }
-windows = { version = "0.58", default-features = false, features = [
+winsafe.workspace = true
+windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_Com",
+    "Win32_Globalization",
     "Win32_UI",
     "Win32_UI_Shell",
     "Win32_System_Threading",
@@ -100,11 +106,11 @@ windows = { version = "0.58", default-features = false, features = [
     "Wdk_System",
     "Wdk_System_Threading",
 ] }
-webview2-com = "0.33"
+webview2-com-sys.workspace = true
 libloading.workspace = true
 strsim.workspace = true
 same-file.workspace = true
-filelocksmith.workspace = true
+# filelocksmith.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

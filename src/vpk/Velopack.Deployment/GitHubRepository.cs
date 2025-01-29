@@ -1,6 +1,7 @@
 ﻿using System.Text;
 using Microsoft.Extensions.Logging;
 using Octokit;
+using Velopack.Core;
 using Velopack.NuGet;
 using Velopack.Packaging;
 using Velopack.Packaging.Exceptions;
@@ -61,13 +62,11 @@ public class GitHubRepository(ILogger logger) : SourceRepository<GitHubDownloadO
         var semVer = options.TagName ?? latest.Version.ToString();
         var releaseName = string.IsNullOrWhiteSpace(options.ReleaseName) ? semVer.ToString() : options.ReleaseName;
 
-        Log.Info($"Preparing to upload {build.Files.Count} asset(s) to GitHub");
-
-        var client = new GitHubClient(new ProductHeaderValue("Velopack")) {
+        Log.Info($"Preparing to upload {build.Count} asset(s) to GitHub");
+        var connection = new Connection(new ProductHeaderValue("Velopack"), new GitHubHttpClient(TimeSpan.FromMinutes(options.Timeout)));
+        var client = new GitHubClient(connection) {
             Credentials = new Credentials(options.Token)
         };
-
-        client.SetRequestTimeout(TimeSpan.FromHours(1));
 
         var existingReleases = await client.Repository.Release.GetAll(repoOwner, repoName);
         if (!options.Merge) {
@@ -111,7 +110,7 @@ public class GitHubRepository(ILogger logger) : SourceRepository<GitHubDownloadO
         }
 
         // upload all assets (incl packages)
-        foreach (var a in build.Files) {
+        foreach (var a in build.GetFilePaths()) {
             await RetryAsync(() => UploadFileAsAsset(client, release, a), $"Uploading asset '{Path.GetFileName(a)}'..");
         }
 
@@ -126,12 +125,12 @@ public class GitHubRepository(ILogger logger) : SourceRepository<GitHubDownloadO
                     releasesFileName,
                     "application/json",
                     new MemoryStream(Encoding.UTF8.GetBytes(json)),
-                    TimeSpan.FromMinutes(5));
+                    timeout: null);
                 await client.Repository.Release.UploadAsset(release, data, CancellationToken.None);
             },
             "Uploading " + releasesFileName);
 
-        if (options.Channel == ReleaseEntryHelper.GetDefaultChannel(RuntimeOs.Windows)) {
+        if (options.Channel == DefaultName.GetDefaultChannel(RuntimeOs.Windows)) {
             var legacyReleasesContent = ReleaseEntryHelper.GetLegacyMigrationReleaseFeedString(feed);
             var legacyReleasesBytes = Encoding.UTF8.GetBytes(legacyReleasesContent);
             await RetryAsync(

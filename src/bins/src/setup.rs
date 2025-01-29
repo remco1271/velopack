@@ -54,10 +54,13 @@ pub fn header_offset_and_length() -> (i64, i64) {
 
 fn main() -> Result<()> {
     windows::mitigate::pre_main_sideload_mitigation();
+    shared::cli_host::clap_run_main("Setup", main_inner)
+}
 
+fn main_inner() -> Result<()> {
     #[rustfmt::skip]
     let mut arg_config = Command::new("Setup")
-        .about(format!("Velopack Setup ({}) installs applications.\nhttps://github.com/velopack/velopack", env!("NGBV_VERSION")))
+        .about(format!("Velopack Setup ({}) installs applications.\nhttps:/velopack.io", env!("NGBV_VERSION")))
         .arg(arg!(-s --silent "Hides all dialogs and answers 'yes' to all prompts"))
         .arg(arg!(-v --verbose "Print debug messages to console"))
         .arg(arg!(-l --log <FILE> "Enable file logging and set location").required(false).value_parser(value_parser!(PathBuf)))
@@ -69,28 +72,18 @@ fn main() -> Result<()> {
             .arg(arg!(-d --debug <FILE> "Debug mode, install from a nupkg file").required(false).value_parser(value_parser!(PathBuf)));
     }
 
-    let res = run_inner(arg_config);
-    if let Err(e) = &res {
-        error!("An error has occurred: {}", e);
-        dialogs::show_error("Setup Error", None, format!("An error has occurred: {}", e).as_str());
-    }
-    
-    Ok(())
-}
-
-fn run_inner(arg_config: Command) -> Result<()>
-{
     let matches = arg_config.try_get_matches()?;
-    
+
     let silent = matches.get_flag("silent");
+    dialogs::set_silent(silent);
+
     let verbose = matches.get_flag("verbose");
-    let debug = matches.get_one::<PathBuf>("debug");
     let logfile = matches.get_one::<PathBuf>("log");
+    logging::setup_logging("setup", logfile, true, verbose)?;
+
+    let debug = matches.get_one::<PathBuf>("debug");
     let install_to = matches.get_one::<PathBuf>("installto");
     let exe_args: Option<Vec<&str>> = matches.get_many::<String>("EXE_ARGS").map(|v| v.map(|f| f.as_str()).collect());
-
-    dialogs::set_silent(silent);
-    logging::setup_logging("setup", logfile, true, verbose)?;
 
     info!("Starting Velopack Setup ({})", env!("NGBV_VERSION"));
     info!("    Location: {:?}", env::current_exe()?);
@@ -122,7 +115,7 @@ fn run_inner(arg_config: Command) -> Result<()>
             info!("Loading bundle from DEBUG nupkg file {:?}...", pkg);
             let mut bundle = velopack::bundle::load_bundle_from_file(pkg)?;
             commands::install(&mut bundle, install_to, exe_args)?;
-            return Ok(())
+            return Ok(());
         }
     }
 
@@ -138,9 +131,8 @@ fn run_inner(arg_config: Command) -> Result<()>
         let zip_range: &[u8] = &mmap[offset as usize..(offset + length) as usize];
         let mut bundle = velopack::bundle::load_bundle_from_memory(&zip_range)?;
         commands::install(&mut bundle, install_to, exe_args)?;
-        return Ok(())
+        return Ok(());
     }
 
     bail!("Could not find embedded zip file. Please contact the application author.");
 }
-

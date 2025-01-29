@@ -8,8 +8,8 @@
   </ItemGroup>
   <ItemGroup>
     <PackageVersion Include="System.Private.Uri" Version="4.3.2" />
-    <PackageVersion Include="System.Text.Json" Version="8.0.5" />
-    <PackageVersion Include="Velopack" Version="0.0.626" />
-    <PackageVersion Include="Velopack.Build" Version="0.0.626" />
+    <PackageVersion Include="System.Text.Json" Version="9.0.1" />
+    <PackageVersion Include="Velopack" Version="0.0.1053" />
+    <PackageVersion Include="Velopack.Build" Version="0.0.1053" />
   </ItemGroup>
 </Project>

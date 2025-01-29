@@ -142,7 +142,25 @@ impl UpdateManager {
         options: Option<UpdateOptions>,
         locator: Option<VelopackLocatorConfig>,
     ) -> Result<UpdateManager, Error> {
+        UpdateManager::new_boxed(source.clone_boxed(), options, locator)
+    }
+
+    /// Create a new UpdateManager instance using the specified UpdateSource.
+    /// This will return an error if the application is not yet installed.
+    /// ## Example:
+    /// ```rust
+    /// use velopack::*;
+    ///
+    /// let source = sources::HttpSource::new("https://the.place/you-host/updates");
+    /// let um = UpdateManager::new_boxed(Box::new(source), None, None);
+    /// ```
+    pub fn new_boxed(
+        source: Box<dyn UpdateSource>,
+        options: Option<UpdateOptions>,
+        locator: Option<VelopackLocatorConfig>,
+    ) -> Result<UpdateManager, Error> {
         let locator = if let Some(config) = locator {
+            warn!("Using explicit locator configuration, ignoring auto-locate.");
             let manifest = config.load_manifest()?;
             VelopackLocator::new(config.clone(), manifest)
         } else {
@@ -150,7 +168,7 @@ impl UpdateManager {
         };
         Ok(UpdateManager {
             options: options.unwrap_or_default(),
-            source: source.clone_boxed(),
+            source,
             locator,
         })
     }
@@ -160,8 +178,10 @@ impl UpdateManager {
         let app_channel = self.locator.get_manifest_channel();
         let mut channel = options_channel.unwrap_or(&app_channel).to_string();
         if channel.is_empty() {
+            warn!("Channel is empty, picking default.");
             channel = locator::default_channel_name();
         }
+        info!("Chosen channel for updates: {:?} (explicit={:?}, memorized={:?})", channel, options_channel, app_channel);
         channel
     }
 
@@ -270,8 +290,8 @@ impl UpdateManager {
             Ok(UpdateCheck::UpdateAvailable(UpdateInfo { TargetFullRelease: remote_asset, IsDowngrade: true }))
         } else if remote_version == app_version && allow_downgrade && is_non_default_channel {
             info!(
-                "Latest remote release is the same version of a different channel, and downgrade is enabled ({} -> {}).",
-                app_version, remote_version
+                "Latest remote release is the same version of a different channel, and downgrade is enabled ({} -> {}, {} -> {}).",
+                app_version, remote_version, app_channel, practical_channel
             );
             Ok(UpdateCheck::UpdateAvailable(UpdateInfo { TargetFullRelease: remote_asset, IsDowngrade: true }))
         } else {
@@ -295,40 +315,49 @@ impl UpdateManager {
     /// - If there is no delta update available, or there is an error preparing delta
     ///   packages, this method will fall back to downloading the full version of the update.
     pub fn download_updates(&self, update: &UpdateInfo, progress: Option<Sender<i16>>) -> Result<(), Error> {
+        let _mutex = &self.locator.try_get_exclusive_lock()?;
         let name = &update.TargetFullRelease.FileName;
         let packages_dir = &self.locator.get_packages_dir();
 
         fs::create_dir_all(packages_dir)?;
-        let target_file = packages_dir.join(name);
+        let final_target_file = packages_dir.join(name);
+        let partial_file = packages_dir.join(format!("{}.partial", name));
 
-        if target_file.exists() {
-            info!("Package already exists on disk, skipping download: '{}'", target_file.to_string_lossy());
+        if final_target_file.exists() {
+            info!("Package already exists on disk, skipping download: '{}'", final_target_file.to_string_lossy());
             return Ok(());
         }
 
-        let g = format!("{}/*.nupkg", packages_dir.to_string_lossy());
-        info!("Searching for packages to clean in: '{}'", g);
+        let old_nupkg_pattern = format!("{}/*.nupkg", packages_dir.to_string_lossy());
+        let old_partial_pattern = format!("{}/*.partial", packages_dir.to_string_lossy());
         let mut to_delete = Vec::new();
-        match glob::glob(&g) {
-            Ok(paths) => {
-                for path in paths {
-                    if let Ok(path) = path {
-                        to_delete.push(path.clone());
-                        debug!("Will delete: '{}'", path.to_string_lossy());
+        
+        fn find_files_to_delete(pattern: &str, to_delete: &mut Vec<String>) {
+            info!("Searching for packages to clean: '{}'", pattern);
+            match glob::glob(pattern) {
+                Ok(paths) => {
+                    for path in paths.into_iter().flatten() {
+                        to_delete.push(path.to_string_lossy().to_string());
                     }
                 }
-            }
-            Err(e) => {
-                error!("Error while searching for packages to clean: {}", e);
+                Err(e) => {
+                    error!("Error while searching for packages to clean: {}", e);
+                }
             }
         }
+        
+        find_files_to_delete(&old_nupkg_pattern, &mut to_delete);
+        find_files_to_delete(&old_partial_pattern, &mut to_delete);
 
-        self.source.download_release_entry(&update.TargetFullRelease, &target_file.to_string_lossy(), progress)?;
-        info!("Successfully placed file: '{}'", target_file.to_string_lossy());
+        self.source.download_release_entry(&update.TargetFullRelease, &partial_file.to_string_lossy(), progress)?;
+        info!("Successfully placed file: '{}'", partial_file.to_string_lossy());
+        
+        info!("Renaming partial file to final target: '{}'", final_target_file.to_string_lossy());
+        fs::rename(&partial_file, &final_target_file)?;
 
         // extract new Update.exe on Windows only
         #[cfg(target_os = "windows")]
-        match crate::bundle::load_bundle_from_file(&target_file) {
+        match crate::bundle::load_bundle_from_file(&final_target_file) {
             Ok(bundle) => {
                 info!("Bundle loaded successfully.");
                 let update_exe_path = self.locator.get_update_path();
@@ -342,7 +371,7 @@ impl UpdateManager {
         }
 
         for path in to_delete {
-            info!("Cleaning up old package: '{}'", path.to_string_lossy());
+            info!("Deleting up old package: '{}'", path);
             let _ = fs::remove_file(&path);
         }
 
@@ -451,7 +480,10 @@ impl UpdateManager {
 
         let mut p = Process::new(&self.locator.get_update_path());
         p.args(&args);
-        p.current_dir(&self.locator.get_root_dir());
+
+        if let Some(update_exe_parent) = self.locator.get_update_path().parent() {
+            p.current_dir(update_exe_parent);
+        }
 
         #[cfg(target_os = "windows")]
         {

@@ -1,4 +1,5 @@
 ﻿using Neovolve.Logging.Xunit;
+using Velopack.Core;
 using Velopack.Packaging.Exceptions;
 using Velopack.Packaging.Windows;
 using Velopack.Util;
@@ -80,14 +81,19 @@ public class CompatUtilTests
         using var logger = GetCompat(out var compat);
         using var _1 = TempUtil.GetTempDirectory(out var dir);
         var sample = PathHelper.GetWpfSample();
-        Exe.InvokeAndThrowIfNonZero(
+        string stdOut = Exe.InvokeAndThrowIfNonZero(
             "dotnet",
             new string[] { "publish", "-o", dir },
             sample);
 
         var path = Path.Combine(dir, "VelopackCSharpWpf.exe");
         Assert.NotNull(compat.Verify(path));
-
+        //We do not expect to see the warning about VelopackApp.Run() not being at the start of the main method
+        Assert.DoesNotContain(logger.Entries, logEntry =>
+            logEntry.LogLevel == LogLevel.Warning &&
+            logEntry.Message.Contains("VelopackApp.Run()")
+        );
+        
         var newPath = Path.Combine(dir, "VelopackCSharpWpf-asd2.exe");
         File.Move(path, newPath);
         Assert.NotNull(compat.Verify(newPath));

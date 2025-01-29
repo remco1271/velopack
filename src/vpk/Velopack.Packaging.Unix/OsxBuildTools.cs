@@ -1,6 +1,7 @@
 ﻿using System.Runtime.Versioning;
 using System.Security;
 using Microsoft.Extensions.Logging;
+using Velopack.Core;
 using Velopack.Util;
 
 namespace Velopack.Packaging.Unix;
@@ -116,7 +117,7 @@ public class OsxBuildTools
 #!/bin/sh
 rm -rf /tmp/velopack/{appId}
 sudo -u "$USER" rm -rf ~/Library/Caches/velopack/{appId}
-sudo -u "$USER" open "$2/{bundleName}/"
+sudo -u "$USER" env VELOPACK_FIRSTRUN=1 open "$2/{bundleName}/"
 exit 0
 """);
         Chmod.ChmodFileAsExecutable(postinstall);

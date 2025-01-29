@@ -97,8 +97,9 @@ public class S3Repository : ObjectRepository<S3DownloadOptions, S3UploadOptions,
         var config = new AmazonS3Config() {
             ServiceURL = options.Endpoint,
             ForcePathStyle = true, // support for MINIO
+            Timeout = TimeSpan.FromMinutes(options.Timeout)
         };
-        
+
         if (options.Endpoint != null) {
             config.ServiceURL = options.Endpoint;
             // if the endpoint is using https, and is _not_ an AWS endpoint, we can disable signing 
