@@ -44,21 +44,29 @@ namespace Velopack.Locators
 
         /// <inheritdoc />
         public override string? Channel { get; }
+        
+        /// <inheritdoc />
+        public override uint ProcessId { get; }
+        
+        /// <inheritdoc />
+        public override string ProcessExePath { get; }
 
         /// <summary>
         /// Creates a new <see cref="OsxVelopackLocator"/> and auto-detects the
         /// app information from metadata embedded in the .app.
         /// </summary>
-        public OsxVelopackLocator(ILogger logger)
+        public OsxVelopackLocator(string currentProcessPath, uint currentProcessId, ILogger logger)
             : base(logger)
         {
             if (!VelopackRuntimeInfo.IsOSX)
                 throw new NotSupportedException("Cannot instantiate OsxLocator on a non-osx system.");
+            
+            ProcessId = currentProcessId;
+            var ourPath = ProcessExePath = currentProcessPath;
 
             Log.Info($"Initialising {nameof(OsxVelopackLocator)}");
 
             // are we inside a .app?
-            var ourPath = VelopackRuntimeInfo.EntryExePath;
             var ix = ourPath.IndexOf(".app/", StringComparison.InvariantCultureIgnoreCase);
             if (ix <= 0) {
                 Log.Warn($"Unable to locate .app root from '{ourPath}'");

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -27,14 +28,18 @@ namespace Velopack.Locators
             if (_current != null)
                 return _current;
 
+            var process = Process.GetCurrentProcess();
+            var processExePath = process.MainModule?.FileName ?? throw new InvalidOperationException("Could not determine process path.");
+            var processId = (uint)process.Id;
+
             if (VelopackRuntimeInfo.IsWindows)
-                return _current = new WindowsVelopackLocator(log);
+                return _current = new WindowsVelopackLocator(processExePath, processId, log);
 
             if (VelopackRuntimeInfo.IsOSX)
-                return _current = new OsxVelopackLocator(log);
+                return _current = new OsxVelopackLocator(processExePath, processId, log);
 
             if (VelopackRuntimeInfo.IsLinux)
-                return _current = new LinuxVelopackLocator(log);
+                return _current = new LinuxVelopackLocator(processExePath, processId, log);
 
             throw new PlatformNotSupportedException($"OS platform '{VelopackRuntimeInfo.SystemOs.GetOsLongName()}' is not supported.");
         }
@@ -61,13 +66,19 @@ namespace Velopack.Locators
         public abstract string? Channel { get; }
 
         /// <inheritdoc/>
+        public abstract uint ProcessId { get; }
+
+        /// <inheritdoc/>
+        public abstract string ProcessExePath { get; }
+        
+        /// <inheritdoc/>
         public virtual bool IsPortable => false;
 
         /// <inheritdoc/>
         public virtual string? ThisExeRelativePath {
             get {
                 if (AppContentDir == null) return null;
-                var path = VelopackRuntimeInfo.EntryExePath;
+                var path = ProcessExePath;
                 if (path.StartsWith(AppContentDir, StringComparison.OrdinalIgnoreCase)) {
                     return path.Substring(AppContentDir.Length + 1);
                 } else {
@@ -143,7 +154,7 @@ namespace Velopack.Locators
         {
             if (PackagesDir == null) return null;
             var stagedUserIdFile = Path.Combine(PackagesDir, ".betaId");
-            var ret = default(Guid);
+            Guid ret;
 
             if (File.Exists(stagedUserIdFile)) {
                 try {
@@ -156,16 +167,12 @@ namespace Velopack.Locators
                     Log.Debug(ex, "Couldn't read staging userId, creating a new one");
                 }
             } else {
-                Log.Warn($"No userId could not be parsed from '{stagedUserIdFile}', creating a new one.");
+                Log.Warn($"No staging userId in file '{stagedUserIdFile}', creating a new one.");
             }
 
-            var prng = new Random();
-            var buf = new byte[4096];
-            prng.NextBytes(buf);
-
-            ret = GuidUtil.CreateGuidFromHash(buf);
+            ret = Guid.NewGuid();
             try {
-                File.WriteAllText(stagedUserIdFile, ret.ToString(), Encoding.UTF8);
+                File.WriteAllText(stagedUserIdFile, ret.ToString("N"), Encoding.UTF8);
                 Log.Info($"Generated new staging userId: {ret}");
                 return ret;
             } catch (Exception ex) {

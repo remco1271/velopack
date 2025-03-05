@@ -1,13 +1,13 @@
-﻿using System.Collections.Concurrent;
-using System.Security;
+﻿using System.Security;
 using System.Text.RegularExpressions;
 using Markdig;
 using Microsoft.Extensions.Logging;
 using NuGet.Versioning;
 using Velopack.Compression;
+using Velopack.Core;
+using Velopack.Core.Abstractions;
 using Velopack.NuGet;
 using Velopack.Packaging.Abstractions;
-using Velopack.Packaging.Exceptions;
 using Velopack.Util;
 
 namespace Velopack.Packaging;
@@ -29,7 +29,7 @@ public abstract class PackageBuilder<T> : ICommand<T>
 
     protected Dictionary<string, string> ExtraNuspecMetadata { get; } = new();
 
-    private readonly Regex REGEX_EXCLUDES = new Regex(@".*[\\\/]createdump.*|.*\.vshost\..*|.*\.nupkg$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private readonly Regex REGEX_EXCLUDES = new(@".*[\\\/]createdump.*|.*\.vshost\..*|.*\.nupkg$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public PackageBuilder(RuntimeOs supportedOs, ILogger logger, IFancyConsole console)
     {
@@ -44,8 +44,9 @@ public abstract class PackageBuilder<T> : ICommand<T>
             options.TargetRuntime = RID.Parse(TargetOs.GetOsShortName());
         }
 
-        if (options.TargetRuntime.BaseRID != TargetOs) {
-            throw new UserInfoException($"To build packages for {TargetOs.GetOsLongName()}, " +
+        if (options.TargetRuntime!.BaseRID != TargetOs) {
+            throw new UserInfoException(
+                $"To build packages for {TargetOs.GetOsLongName()}, " +
                 $"the target rid must be {TargetOs} (actually was {options.TargetRuntime?.BaseRID}). " +
                 $"If your real intention was to cross-compile a release for {options.TargetRuntime?.BaseRID} then you " +
                 $"should provide an OS directive: eg. 'vpk [{options.TargetRuntime?.BaseRID.GetOsShortName()}] pack ...'");
@@ -55,19 +56,28 @@ public abstract class PackageBuilder<T> : ICommand<T>
         Log.Info("Releases Directory: " + options.ReleaseDir.FullName);
 
         var releaseDir = options.ReleaseDir;
-        var channel = options.Channel?.ToLower() ?? ReleaseEntryHelper.GetDefaultChannel(TargetOs);
+        var channel = options.Channel?.ToLower() ?? DefaultName.GetDefaultChannel(TargetOs);
         options.Channel = channel;
 
         var entryHelper = new ReleaseEntryHelper(releaseDir.FullName, channel, Log, TargetOs);
         if (entryHelper.DoesSimilarVersionExist(SemanticVersion.Parse(options.PackVersion))) {
-            if (await Console.PromptYesNo("A release in this channel with the same or greater version already exists. Do you want to continue and potentially overwrite files?") != true) {
-                throw new UserInfoException($"There is a release in channel {channel} which is equal or greater to the current version {options.PackVersion}. Please increase the current package version or remove that release.");
+            if (await Console.PromptYesNo(
+                    "A release in this channel with the same or greater version already exists. Do you want to continue and potentially overwrite files?") !=
+                true) {
+                throw new UserInfoException(
+                    $"There is a release in channel {channel} which is equal or greater to the current version {options.PackVersion}. Please increase the current package version or remove that release.");
             }
         }
+
+        using var _1 = TempUtil.GetTempDirectory(out var pkgTempDir);
+        TempDir = new DirectoryInfo(pkgTempDir);
 
         var packId = options.PackId;
         var packDirectory = options.PackDirectory;
         var packVersion = options.PackVersion;
+
+        // extract pre-bundled apps as required (eg. .AppImage or .pkg)
+        packDirectory = ExtractPackDir(packDirectory);
 
         // check that entry exe exists
         var mainExeName = options.EntryExecutableName ?? options.PackId;
@@ -79,10 +89,12 @@ public abstract class PackageBuilder<T> : ICommand<T>
                 break;
             }
         }
+
         if (mainExePath == null) {
             throw new UserInfoException(
                 $"Could not find main application executable (the one that runs 'VelopackApp.Build().Run()'). " + Environment.NewLine +
-                $"If your main binary is not named '{mainExeName}', please specify the name with the argument: --mainExe {{yourBinary.exe}}" + Environment.NewLine +
+                $"If your main binary is not named '{mainExeName}', please specify the name with the argument: --mainExe {{yourBinary.exe}}" +
+                Environment.NewLine +
                 $"I searched the following paths and none exist: " + Environment.NewLine +
                 String.Join(Environment.NewLine, mainSearchPaths)
             );
@@ -90,104 +102,114 @@ public abstract class PackageBuilder<T> : ICommand<T>
 
         MainExePath = mainExePath;
         options.EntryExecutableName = Path.GetFileName(mainExePath);
-
-        using var _1 = TempUtil.GetTempDirectory(out var pkgTempDir);
-        TempDir = new DirectoryInfo(pkgTempDir);
         Options = options;
 
-        ConcurrentBag<(string from, string to)> filesToCopy = new();
+        var assetCache = new BuildAssets(pkgTempDir, channel);
 
-        string getIncompletePath(string fileName)
-        {
-            var incomplete = Path.Combine(pkgTempDir, fileName);
-            var final = Path.Combine(releaseDir.FullName, fileName);
-            try { File.Delete(incomplete); } catch { }
-            filesToCopy.Add((incomplete, final));
-            return incomplete;
-        }
+        await Console.ExecuteProgressAsync(
+            async (ctx) => {
+                ReleasePackage prev = null;
+                await ctx.RunTask(
+                    "Pre-process steps",
+                    async (progress) => {
+                        prev = entryHelper.GetPreviousFullRelease(NuGetVersion.Parse(packVersion));
+                        packDirectory = await PreprocessPackDir(progress, packDirectory);
+                    });
 
-        await Console.ExecuteProgressAsync(async (ctx) => {
-            ReleasePackage prev = null;
-            await ctx.RunTask("Pre-process steps", async (progress) => {
-                prev = entryHelper.GetPreviousFullRelease(NuGetVersion.Parse(packVersion));
-                packDirectory = await PreprocessPackDir(progress, packDirectory);
-            });
-
-            if (TargetOs != RuntimeOs.Linux) {
-                await ctx.RunTask("Code-sign application", async (progress) => {
-                    await CodeSign(progress, packDirectory);
-                });
-            }
-
-            Task portableTask = null;
-            if (TargetOs == RuntimeOs.Linux || !Options.NoPortable) {
-                portableTask = ctx.RunTask("Building portable package", async (progress) => {
-                    var suggestedName = ReleaseEntryHelper.GetSuggestedPortableName(packId, channel, TargetOs);
-                    var path = getIncompletePath(suggestedName);
-                    await CreatePortablePackage(progress, packDirectory, path);
-                });
-            }
-
-            // TODO: hack, this is a prerequisite for building full package but only on linux
-            if (TargetOs == RuntimeOs.Linux) await portableTask;
-
-            string releasePath = null;
-            await ctx.RunTask($"Building release {packVersion}", async (progress) => {
-                var suggestedName = ReleaseEntryHelper.GetSuggestedReleaseName(packId, packVersion, channel, false, TargetOs);
-                releasePath = getIncompletePath(suggestedName);
-                await CreateReleasePackage(progress, packDirectory, releasePath);
-            });
-
-            Task setupTask = null;
-            if (!Options.NoInst && TargetOs != RuntimeOs.Linux) {
-                setupTask = ctx.RunTask("Building setup package", async (progress) => {
-                    var suggestedName = ReleaseEntryHelper.GetSuggestedSetupName(packId, channel, TargetOs);
-                    var path = getIncompletePath(suggestedName);
-                    await CreateSetupPackage(progress, releasePath, packDirectory, path);
-                });
-            }
-
-            if (prev != null && options.DeltaMode != DeltaMode.None) {
-                await ctx.RunTask($"Building delta {prev.Version} -> {packVersion}", async (progress) => {
-                    var suggestedName = ReleaseEntryHelper.GetSuggestedReleaseName(packId, packVersion, channel, true, TargetOs);
-                    var deltaPkg = await CreateDeltaPackage(progress, releasePath, prev.PackageFile, getIncompletePath(suggestedName), options.DeltaMode);
-                });
-            }
-
-            if (TargetOs != RuntimeOs.Linux && portableTask != null) await portableTask;
-            if (setupTask != null) await setupTask;
-
-            await ctx.RunTask("Post-process steps", (progress) => {
-                foreach (var f in filesToCopy) {
-                    IoUtil.MoveFile(f.from, f.to, true);
+                if (TargetOs != RuntimeOs.Linux) {
+                    await ctx.RunTask(
+                        "Code-sign application",
+                        async (progress) => {
+                            await CodeSign(progress, packDirectory);
+                        });
                 }
 
-                ReleaseEntryHelper.UpdateReleaseFiles(releaseDir.FullName, Log);
-                BuildAssets.Write(releaseDir.FullName, channel, filesToCopy.Select(x => x.to));
-                progress(100);
-                return Task.CompletedTask;
+                Task portableTask = null;
+                if (TargetOs == RuntimeOs.Linux || !Options.NoPortable) {
+                    portableTask = ctx.RunTask(
+                        "Building portable package",
+                        async (progress) => {
+                            var suggestedName = DefaultName.GetSuggestedPortableName(packId, channel, TargetOs);
+                            var path = assetCache.MakeAssetPath(suggestedName, VelopackAssetType.Portable);
+                            await CreatePortablePackage(progress, packDirectory, path);
+                        });
+                }
+
+                // TODO: hack, this is a prerequisite for building full package but only on linux
+                if (TargetOs == RuntimeOs.Linux) await portableTask!;
+
+                string releasePath = null;
+                await ctx.RunTask(
+                    $"Building release {packVersion}",
+                    async (progress) => {
+                        var suggestedName = DefaultName.GetSuggestedReleaseName(packId, packVersion, channel, false, TargetOs);
+                        releasePath = assetCache.MakeAssetPath(suggestedName, VelopackAssetType.Full);
+                        await CreateReleasePackage(progress, packDirectory, releasePath);
+                    });
+
+                Task setupTask = null;
+                if (!Options.NoInst && TargetOs != RuntimeOs.Linux) {
+                    setupTask = ctx.RunTask(
+                        "Building setup package",
+                        async (progress) => {
+                            var suggestedName = DefaultName.GetSuggestedSetupName(packId, channel, TargetOs);
+                            var path = assetCache.MakeAssetPath(suggestedName, VelopackAssetType.Installer);
+                            await CreateSetupPackage(progress, releasePath, packDirectory, path, assetCache.MakeAssetPath);
+                        });
+                }
+
+                if (prev != null && options.DeltaMode != DeltaMode.None) {
+                    await ctx.RunTask(
+                        $"Building delta {prev.Version} -> {packVersion}",
+                        async (progress) => {
+                            var suggestedName = DefaultName.GetSuggestedReleaseName(packId, packVersion, channel, true, TargetOs);
+                            var path = assetCache.MakeAssetPath(suggestedName, VelopackAssetType.Delta);
+                            var deltaPkg = await CreateDeltaPackage(
+                                progress,
+                                releasePath,
+                                prev.PackageFile,
+                                path,
+                                options.DeltaMode);
+                        });
+                }
+
+                if (TargetOs != RuntimeOs.Linux && portableTask != null) await portableTask;
+                if (setupTask != null) await setupTask;
+
+                await ctx.RunTask(
+                    "Post-process steps",
+                    (progress) => {
+                        assetCache.MoveBagTo(releaseDir.FullName);
+                        assetCache.Write();
+                        ReleaseEntryHelper.UpdateReleaseFiles(releaseDir.FullName, Log);
+                        progress(100);
+                        return Task.CompletedTask;
+                    });
             });
-        });
     }
+
+    protected virtual string ExtractPackDir(string packDirectory) => packDirectory;
 
     protected abstract string[] GetMainExeSearchPaths(string packDirectory, string mainExeName);
 
     protected virtual string GenerateNuspecContent()
     {
         var packId = Options.PackId;
-        var packTitle = Options.PackTitle ?? Options.PackId;
-        var packAuthors = Options.PackAuthors ?? Options.PackId;
+        var packTitle = GetEffectiveTitle();
+        var packAuthors = GetEffectiveAuthors();
         var packVersion = Options.PackVersion;
         var releaseNotes = Options.ReleaseNotes;
         var rid = Options.TargetRuntime;
 
         string extraMetadata = "";
+
         void addMetadata(string key, string value)
         {
             if (!String.IsNullOrEmpty(key) && !String.IsNullOrEmpty(value)) {
                 if (!SecurityElement.IsValidText(value)) {
                     value = $"""<![CDATA[{"\n"}{value}{"\n"}]]>""";
                 }
+
                 extraMetadata += $"<{key}>{value}</{key}>{Environment.NewLine}";
             }
         }
@@ -213,22 +235,22 @@ public abstract class PackageBuilder<T> : ICommand<T>
         }
 
         string nuspec = $"""
-<?xml version="1.0" encoding="utf-8"?>
-<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
-<metadata>
-<id>{packId}</id>
-<title>{packTitle ?? packId}</title>
-<description>{packTitle ?? packId}</description>
-<authors>{packAuthors ?? packId}</authors>
-<version>{packVersion}</version>
-<channel>{Options.Channel}</channel>
-<mainExe>{Options.EntryExecutableName}</mainExe>
-<os>{rid.BaseRID.GetOsShortName()}</os>
-<rid>{rid.ToDisplay(RidDisplayType.NoVersion)}</rid>
-{extraMetadata.Trim()}
-</metadata>
-</package>
-""".Trim();
+            <?xml version="1.0" encoding="utf-8"?>
+            <package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+            <metadata>
+            <id>{packId}</id>
+            <title>{packTitle}</title>
+            <description>{packTitle}</description>
+            <authors>{packAuthors ?? packId}</authors>
+            <version>{packVersion}</version>
+            <channel>{Options.Channel}</channel>
+            <mainExe>{Options.EntryExecutableName}</mainExe>
+            <os>{rid.BaseRID.GetOsShortName()}</os>
+            <rid>{rid.ToDisplay(RidDisplayType.NoVersion)}</rid>
+            {extraMetadata.Trim()}
+            </metadata>
+            </package>
+            """.Trim();
 
         return nuspec;
     }
@@ -249,7 +271,7 @@ public abstract class PackageBuilder<T> : ICommand<T>
         return Task.FromResult(dp.PackageFile);
     }
 
-    protected virtual Task CreateSetupPackage(Action<int> progress, string releasePkg, string packDir, string outputPath)
+    protected virtual Task CreateSetupPackage(Action<int> progress, string releasePkg, string packDir, string outputPath, Func<string, VelopackAssetType, string> createAsset)
     {
         return Task.CompletedTask;
     }
@@ -275,10 +297,7 @@ public abstract class PackageBuilder<T> : ICommand<T>
         progress(100);
     }
 
-    protected virtual Dictionary<string, string> GetReleaseMetadataFiles()
-    {
-        return new Dictionary<string, string>();
-    }
+    protected virtual Dictionary<string, string> GetReleaseMetadataFiles() => [];
 
     protected virtual void CopyFiles(DirectoryInfo source, DirectoryInfo target, Action<int> progress, bool excludeAnnoyances = false)
     {
@@ -310,6 +329,7 @@ public abstract class PackageBuilder<T> : ICommand<T>
                         Log.Debug("Skipping because matched exclude pattern: " + path);
                         continue;
                     }
+
                     fileInfo.CopyTo(path, true);
                 }
 
@@ -325,7 +345,7 @@ public abstract class PackageBuilder<T> : ICommand<T>
             // copy the contents of the folder, not the folder itself.
             var src = source.FullName.TrimEnd('/') + "/.";
             var dest = target.FullName.TrimEnd('/') + "/";
-            Log.Debug(Exe.InvokeAndThrowIfNonZero("cp", new[] { "-a", src, dest }, null));
+            Log.Debug(Exe.InvokeAndThrowIfNonZero("cp", ["-a", src, dest], null));
 
             if (excludeAnnoyances) {
                 foreach (var f in target.EnumerateFiles("*", SearchOption.AllDirectories)) {
@@ -351,12 +371,12 @@ public abstract class PackageBuilder<T> : ICommand<T>
             .ToArray();
 
         var contentType = $"""
-<?xml version="1.0" encoding="utf-8"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />
-{String.Join(Environment.NewLine, extensions)}
-</Types>
-""";
+            <?xml version="1.0" encoding="utf-8"?>
+            <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+              <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml" />
+            {String.Join(Environment.NewLine, extensions)}
+            </Types>
+            """;
 
         File.WriteAllText(Path.Combine(rootDirectory, NugetUtil.ContentTypeFileName), contentType);
 
@@ -364,11 +384,15 @@ public abstract class PackageBuilder<T> : ICommand<T>
         Directory.CreateDirectory(relsDir);
 
         var rels = $"""
-<?xml version="1.0" encoding="utf-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Type="http://schemas.microsoft.com/packaging/2010/07/manifest" Target="/{Path.GetFileName(nuspecPath)}" Id="R1" />
-</Relationships>
-""";
+            <?xml version="1.0" encoding="utf-8"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Type="http://schemas.microsoft.com/packaging/2010/07/manifest" Target="/{Path.GetFileName(nuspecPath)}" Id="R1" />
+            </Relationships>
+            """;
         File.WriteAllText(Path.Combine(relsDir, ".rels"), rels);
     }
+
+    protected string GetEffectiveTitle() => Options.PackTitle ?? Options.PackId;
+
+    protected string GetEffectiveAuthors() => Options.PackAuthors ?? Options.PackId;
 }

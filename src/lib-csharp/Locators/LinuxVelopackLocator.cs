@@ -32,7 +32,7 @@ namespace Velopack.Locators
 
         /// <inheritdoc />
         public override string? Channel { get; }
-
+        
         /// <inheritdoc />
         public override string? AppTempDir => CreateSubDirIfDoesNotExist(TempUtil.GetDefaultTempBaseDirectory(), AppId);
 
@@ -47,21 +47,29 @@ namespace Velopack.Locators
 
         /// <summary> File path of the .AppImage which mounted and ran this application. </summary>
         public string? AppImagePath => Environment.GetEnvironmentVariable("APPIMAGE");
+        
+        /// <inheritdoc />
+        public override uint ProcessId { get; }
+        
+        /// <inheritdoc />
+        public override string ProcessExePath { get; }
 
         /// <summary>
         /// Creates a new <see cref="OsxVelopackLocator"/> and auto-detects the
         /// app information from metadata embedded in the .app.
         /// </summary>
-        public LinuxVelopackLocator(ILogger logger)
+        public LinuxVelopackLocator(string currentProcessPath, uint currentProcessId, ILogger logger)
             : base(logger)
         {
             if (!VelopackRuntimeInfo.IsLinux)
                 throw new NotSupportedException("Cannot instantiate LinuxVelopackLocator on a non-linux system.");
+            
+            ProcessId = currentProcessId;
+            var ourPath = ProcessExePath = currentProcessPath;
 
             Log.Info($"Initialising {nameof(LinuxVelopackLocator)}");
 
             // are we inside a mounted .AppImage?
-            var ourPath = VelopackRuntimeInfo.EntryExePath;
             var ix = ourPath.IndexOf("/usr/bin/", StringComparison.InvariantCultureIgnoreCase);
             if (ix <= 0) {
                 Log.Warn($"Unable to locate .AppImage root from '{ourPath}'. This warning indicates that the application is not running from a mounted .AppImage, for example during development.");

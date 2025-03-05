@@ -1,6 +1,5 @@
-﻿using System.Security.Cryptography;
-using Microsoft.Extensions.Logging;
-using Velopack.Packaging;
+﻿using Microsoft.Extensions.Logging;
+using Velopack.Core;
 using Velopack.Packaging.Abstractions;
 using Velopack.Sources;
 using Velopack.Util;
@@ -14,11 +13,13 @@ public class RepositoryOptions : IOutputOptions
     public RuntimeOs TargetOs { get; set; }
 
     public string Channel {
-        get => _channel ?? ReleaseEntryHelper.GetDefaultChannel(TargetOs);
+        get => _channel ?? DefaultName.GetDefaultChannel(TargetOs);
         set => _channel = value;
     }
 
     public DirectoryInfo ReleaseDir { get; set; }
+
+    public double Timeout { get; set; } = 30d;
 }
 
 public interface IRepositoryCanUpload<TUp> where TUp : RepositoryOptions
@@ -37,7 +38,8 @@ public abstract class SourceRepository<TDown, TSource> : DownRepository<TDown>
 {
     public SourceRepository(ILogger logger)
         : base(logger)
-    { }
+    {
+    }
 
     protected override Task<VelopackAssetFeed> GetReleasesAsync(TDown options)
     {
@@ -104,8 +106,7 @@ public abstract class DownRepository<TDown> : IRepositoryCanDownload<TDown>
                 Log.Error($"Checksum mismatch, expected {latest.SHA256}, got {newHash}");
                 return;
             }
-        }
-        else if (latest.SHA1 != (newHash = IoUtil.CalculateFileSHA1(incomplete))) {
+        } else if (latest.SHA1 != (newHash = IoUtil.CalculateFileSHA1(incomplete))) {
             Log.Error($"Checksum mismatch, expected {latest.SHA1}, got {newHash}");
             return;
         }

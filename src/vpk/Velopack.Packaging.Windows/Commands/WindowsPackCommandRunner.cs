@@ -1,8 +1,14 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using System.Globalization;
+using System.Runtime.Versioning;
+using System.Text;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using NuGet.Versioning;
 using Velopack.Compression;
+using Velopack.Core;
+using Velopack.Core.Abstractions;
 using Velopack.NuGet;
-using Velopack.Packaging.Abstractions;
-using Velopack.Packaging.Exceptions;
 using Velopack.Util;
 using Velopack.Windows;
 
@@ -17,12 +23,14 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
 
     protected override Task CodeSign(Action<int> progress, string packDir)
     {
+        Regex fileExcludeRegex = Options.SignExclude != null ? new Regex(Options.SignExclude) : null;
         var filesToSign = new DirectoryInfo(packDir).GetAllFilesRecursively()
-            .Where(x => Options.SignSkipDll ? PathUtil.PathPartEndsWith(x.Name, ".exe") : PathUtil.FileIsLikelyPEImage(x.Name))
+            .Where(x => !fileExcludeRegex?.IsMatch(x.FullName) ?? PathUtil.FileIsLikelyPEImage(x.Name))
             .Select(x => x.FullName)
             .ToArray();
 
-        SignFilesImpl(Options, progress, filesToSign);
+        SignFilesImpl(progress, filesToSign);
+
         return Task.CompletedTask;
     }
 
@@ -56,9 +64,9 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         if (clickonceManifests.Any()) {
             foreach (var manifest in clickonceManifests) {
                 Log.Warn(
-                    $"Clickonce manifest found in pack directory: '{Path.GetFileName(manifest)}'. " +
-                    $"Velopack does not support building clickonce applications, and so will delete this file automatically. " +
-                    $"It is recommended that you remove clickonce from your .csproj to avoid this warning.");
+                    $"ClickOnce manifest found in pack directory: '{Path.GetFileName(manifest)}'. " +
+                    $"Velopack does not support building ClickOnce applications, and so will delete this file automatically. " +
+                    $"It is recommended that you remove ClickOnce from your .csproj to avoid this warning.");
                 File.Delete(manifest);
             }
         }
@@ -87,7 +95,7 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
             return null;
 
         try {
-            var shortcuts = Options.Shortcuts.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+            var shortcuts = Options.Shortcuts.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries)
                 .Select(x => x.Trim())
                 .Select(x => (ShortcutLocation) Enum.Parse(typeof(ShortcutLocation), x, true))
                 .ToList();
@@ -112,7 +120,7 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
             return "";
 
         var providedRuntimes = Options.Runtimes.ToLower()
-                .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries);
 
         var valid = new string[] {
             "webview2",
@@ -131,6 +139,9 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
             "vcredist143-x86",
             "vcredist143-x64",
             "vcredist143-arm64",
+            "vcredist144-x86",
+            "vcredist144-x64",
+            "vcredist144-arm64",
             "net45",
             "net451",
             "net452",
@@ -144,7 +155,7 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
             "net481",
         };
 
-        List<string> validated = new();
+        List<string> validated = [];
 
         foreach (var str in providedRuntimes) {
             if (valid.Contains(str)) {
@@ -161,7 +172,8 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
             }
 #pragma warning restore CS0618 // Type or member is obsolete
 
-            throw new UserInfoException($"The framework/runtime dependency '{str}' is not valid. See https://github.com/velopack/velopack/blob/master/docs/bootstrapping.md");
+            throw new UserInfoException(
+                $"The framework/runtime dependency '{str}' is not valid. See https://docs.velopack.io/packaging/bootstrapping");
         }
 
         foreach (var str in validated) {
@@ -171,27 +183,48 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         return String.Join(",", validated);
     }
 
-    protected override Task CreateSetupPackage(Action<int> progress, string releasePkg, string packDir, string targetSetupExe)
+    protected override Task CreateSetupPackage(Action<int> progress, string releasePkg, string packDir, string targetSetupExe, Func<string, VelopackAssetType, string> createAsset)
     {
+        void setupExeProgress(int x)
+        {
+            if (Options.BuildMsi) {
+                progress(x / 2);
+            } else {
+                progress(x);
+            }
+        }
+        void msiProgress(int value)
+        {
+            progress(50 + value / 2);
+        }
+
         var bundledZip = new ZipPackage(releasePkg);
         IoUtil.Retry(() => File.Copy(HelperFile.SetupPath, targetSetupExe, true));
-        progress(10);
+        setupExeProgress(10);
 
         var editor = new ResourceEdit(targetSetupExe, Log);
         editor.SetVersionInfo(bundledZip);
         if (Options.Icon != null) {
             editor.SetExeIcon(Options.Icon);
         }
+
         editor.Commit();
 
-        progress(25);
+        setupExeProgress(25);
         Log.Debug($"Creating Setup bundle");
         SetupBundle.CreatePackageBundle(targetSetupExe, releasePkg);
-        progress(50);
+        setupExeProgress(50);
         Log.Debug("Signing Setup bundle");
-        SignFilesImpl(Options, CoreUtil.CreateProgressDelegate(progress, 50, 100), targetSetupExe);
+        SignFilesImpl(CoreUtil.CreateProgressDelegate( setupExeProgress, 50, 100), targetSetupExe);
         Log.Debug($"Setup bundle created '{Path.GetFileName(targetSetupExe)}'.");
-        progress(100);
+        setupExeProgress(100);
+
+        if (Options.BuildMsi && VelopackRuntimeInfo.IsWindows) {
+            var msiName = DefaultName.GetSuggestedMsiName(Options.PackId, Options.Channel, TargetOs);
+            var msiPath = createAsset(msiName, VelopackAssetType.MsiDeploymentTool);
+            CompileWixTemplateToMsi(msiProgress, targetSetupExe, msiPath);
+        }
+
         return Task.CompletedTask;
     }
 
@@ -206,7 +239,8 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         File.Delete(Path.Combine(current.FullName, "Squirrel.exe"));
 
         // move the stub to the root of the portable package
-        var stubPath = Path.Combine(current.FullName,
+        var stubPath = Path.Combine(
+            current.FullName,
             Path.GetFileNameWithoutExtension(Options.EntryExecutableName) + "_ExecutionStub.exe");
         var stubName = (Options.PackTitle ?? Options.PackId) + ".exe";
         File.Move(stubPath, Path.Combine(dir.FullName, stubName));
@@ -226,6 +260,7 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         return dict;
     }
 
+
     private void CreateExecutableStubForExe(string exeToCopy, string targetStubPath)
     {
         if (!File.Exists(exeToCopy)) {
@@ -242,14 +277,15 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         }
     }
 
-    private void SignFilesImpl(WindowsSigningOptions options, Action<int> progress, params string[] filePaths)
+    private void SignFilesImpl(Action<int> progress, params string[] filePaths)
     {
-        var signParams = options.SignParameters;
-        var signTemplate = options.SignTemplate;
-        var signParallel = options.SignParallel;
+        var signParams = Options.SignParameters;
+        var signTemplate = Options.SignTemplate;
+        var signParallel = Options.SignParallel;
+        var trustedSignMetadataPath = Options.AzureTrustedSignFile;
         var helper = new CodeSign(Log);
 
-        if (string.IsNullOrEmpty(signParams) && string.IsNullOrEmpty(signTemplate)) {
+        if (string.IsNullOrEmpty(signParams) && string.IsNullOrEmpty(signTemplate) && string.IsNullOrEmpty(trustedSignMetadataPath)) {
             Log.Warn($"No signing parameters provided, {filePaths.Length} file(s) will not be signed.");
             return;
         }
@@ -261,16 +297,132 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
         // signtool.exe does not work if we're not on windows.
         if (!VelopackRuntimeInfo.IsWindows) return;
 
-        if (!string.IsNullOrEmpty(signParams)) {
+        if (!string.IsNullOrEmpty(trustedSignMetadataPath)) {
+            Log.Info($"Use Azure Trusted Signing service for code signing. Metadata file path: {trustedSignMetadataPath}");
+
+            string dlibPath = GetDlibPath(CancellationToken.None);
+            signParams = $"/fd SHA256 /tr http://timestamp.acs.microsoft.com /v /debug /td SHA256 /dlib {HelperFile.AzureDlibFileName} /dmdf \"{trustedSignMetadataPath}\"";
+            helper.Sign(filePaths, signParams, signParallel, progress, false);
+        } else if (!string.IsNullOrEmpty(signParams)) {
             helper.Sign(filePaths, signParams, signParallel, progress, false);
         }
     }
 
+    [SupportedOSPlatform("windows")]
+    private string GetDlibPath(CancellationToken cancellationToken)
+    {
+        // DLib library is required for Azure Trusted Signing. It must be in the same directory as SignTool.exe.
+        // https://learn.microsoft.com/azure/trusted-signing/how-to-signing-integrations#download-and-install-the-trusted-signing-dlib-package
+        var signToolPath = HelperFile.SignToolPath;
+        var signToolDirectory = Path.GetDirectoryName(signToolPath);
+        var dlibPath = Path.Combine(signToolDirectory, HelperFile.AzureDlibFileName);
+        if (File.Exists(dlibPath)) {
+            return dlibPath;
+        }
+
+        throw new NotSupportedException("Azure Trusted Signing is not supported in this version of Velopack.");
+
+        // Log.Info($"Downloading Azure Trusted Signing dlib to '{dlibPath}'");
+        // var dl = new NuGetDownloader();
+        //
+        // using MemoryStream nupkgStream = new();
+        // await dl.DownloadPackageToStream("Microsoft.Trusted.Signing.Client", "1.*", nupkgStream, cancellationToken);
+        //
+        // nupkgStream.Position = 0;
+        //
+        // string parentDir = NugetUtil.BinDirectory + Path.AltDirectorySeparatorChar + "x64" + Path.AltDirectorySeparatorChar;
+        //
+        // ZipArchive zipPackage = new(nupkgStream);
+        // var entries = zipPackage.Entries.Where(x => x.FullName.StartsWith(parentDir, StringComparison.OrdinalIgnoreCase));
+        // foreach (var entry in entries) {
+        //     var relativePath = entry.FullName.Substring(parentDir.Length);
+        //     entry.ExtractToFile(Path.Combine(signToolDirectory, relativePath), true);
+        // }
+        // return dlibPath;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private void CompileWixTemplateToMsi(Action<int> progress,
+        string setupExePath, string msiFilePath)
+    {
+        bool packageAs64Bit = 
+            Options.TargetRuntime.Architecture is RuntimeCpu.x64 or RuntimeCpu.arm64;
+
+        Log.Info($"Compiling machine-wide msi deployment tool in {(packageAs64Bit ? "64-bit" : "32-bit")} mode");
+
+        var outputDirectory = Path.GetDirectoryName(setupExePath);
+        var setupName = Path.GetFileNameWithoutExtension(setupExePath);
+        var culture = CultureInfo.GetCultureInfo("en-US").TextInfo.ANSICodePage;
+
+        // WiX Identifiers may contain ASCII characters A-Z, a-z, digits, underscores (_), or
+        // periods(.). Every identifier must begin with either a letter or an underscore.
+        var wixId = Regex.Replace(Options.PackId, @"[^\w\.]", "_");
+        if (char.GetUnicodeCategory(wixId[0]) == UnicodeCategory.DecimalDigitNumber)
+            wixId = "_" + wixId;
+
+        Regex stacheRegex = new(@"\{\{(?<key>[^\}]+)\}\}", RegexOptions.Compiled);
+
+        var wxsFile = Path.Combine(outputDirectory, wixId + ".wxs");
+        var objFile = Path.Combine(outputDirectory, wixId + ".wixobj");
+
+
+        var msiVersion = Options.MsiVersionOverride;
+        if (string.IsNullOrWhiteSpace(msiVersion)) {
+            var parsedVersion = SemanticVersion.Parse(Options.PackVersion);
+            msiVersion = $"{parsedVersion.Major}.{parsedVersion.Minor}.{parsedVersion.Patch}.0";
+        }
+
+        try {
+            // apply dictionary to wsx template
+            var templateText = File.ReadAllText(HelperFile.WixTemplatePath);
+
+            var templateResult = stacheRegex.Replace(templateText, match => {
+                string key = match.Groups["key"].Value;
+                return key switch {
+                    "Id" => wixId,
+                    "Title" => GetEffectiveTitle(),
+                    "Author" => GetEffectiveAuthors(),
+                    "Version" => msiVersion,
+                    "Summary" => GetEffectiveTitle(),
+                    "Codepage" => $"{culture}",
+                    "Platform" => packageAs64Bit ? "x64" : "x86",
+                    "ProgramFilesFolder" => packageAs64Bit ? "ProgramFiles64Folder" : "ProgramFilesFolder",
+                    "Win64YesNo" => packageAs64Bit ? "yes" : "no",
+                    "SetupName" => setupName,
+                    _ when key.StartsWith("IdAsGuid") => GuidUtil.CreateGuidFromHash($"{Options.PackId}:{key.Substring(8)}").ToString(),
+                    _ => match.Value,
+                };
+            });
+
+            File.WriteAllText(wxsFile, templateResult, Encoding.UTF8);
+
+            // Candle reprocesses and compiles WiX source files into object files (.wixobj).
+            Log.Info("Compiling WiX Template (candle.exe)");
+            var candleCommand = $"{HelperFile.WixCandlePath} -nologo -ext WixNetFxExtension -out \"{objFile}\" \"{wxsFile}\"";
+            _ = Exe.RunHostedCommand(candleCommand);
+
+            progress(45);
+
+            // Light links and binds one or more .wixobj files and creates a Windows Installer database (.msi or .msm). 
+            Log.Info("Linking WiX Template (light.exe)");
+            var lightCommand = $"{HelperFile.WixLightPath} -ext WixNetFxExtension -spdb -sval -out \"{msiFilePath}\" \"{objFile}\"";
+            _ = Exe.RunHostedCommand(lightCommand);
+
+            progress(90);
+
+        } finally {
+            IoUtil.DeleteFileOrDirectoryHard(wxsFile, throwOnFailure: false);
+            IoUtil.DeleteFileOrDirectoryHard(objFile, throwOnFailure: false);
+        }
+        progress(100);
+
+    }
+
     protected override string[] GetMainExeSearchPaths(string packDirectory, string mainExeName)
     {
-        return new[] {
+        return [
             Path.Combine(packDirectory, mainExeName),
             Path.Combine(packDirectory, mainExeName) + ".exe",
-        };
+        ];
     }
 }

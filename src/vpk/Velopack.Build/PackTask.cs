@@ -47,8 +47,6 @@ public class PackTask : MSBuildAsyncTask
 
     public string? Channel { get; set; }
 
-    public bool PackIsAppDir { get; set; }
-
     public string? Exclude { get; set; }
 
     public bool NoPortable { get; private set; }
@@ -68,6 +66,8 @@ public class PackTask : MSBuildAsyncTask
     public string? SignInstallIdentity { get; set; }
 
     public string? SignEntitlements { get; set; }
+    
+    public bool SignDisableDeep { get; set; }
 
     public string? NotaryProfile { get; set; }
 
@@ -82,8 +82,10 @@ public class PackTask : MSBuildAsyncTask
     public bool SkipVelopackAppCheck { get; set; }
 
     public string? SignParameters { get; set; }
+    
+    public string? AzureTrustedSignFile { get; set; }
 
-    public bool SignSkipDll { get; set; }
+    public string? SignExclude { get; set; }
 
     public int SignParallel { get; set; } = 10;
 
@@ -94,6 +96,10 @@ public class PackTask : MSBuildAsyncTask
     public string? Shortcuts { get; set; }
     
     public string? Compression { get; set; }
+
+    public bool BuildMsi { get; set; }
+
+    public string? MsiVersionOverride { get; set; }
 
     protected override async Task<bool> ExecuteAsync(CancellationToken cancellationToken)
     {

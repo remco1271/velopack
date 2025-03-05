@@ -2,11 +2,12 @@
 using System.Globalization;
 using System.Runtime.Versioning;
 using System.Xml.Linq;
+using Microsoft.Deployment.WindowsInstaller;
 using Microsoft.Win32;
 using NuGet.Packaging;
 using Velopack.Compression;
+using Velopack.Core;
 using Velopack.Packaging.Commands;
-using Velopack.Packaging.Exceptions;
 using Velopack.Packaging.Windows.Commands;
 using Velopack.Util;
 using Velopack.Vpk;
@@ -25,7 +26,7 @@ public class WindowsPackTests
         _output = output;
     }
 
-    private WindowsPackCommandRunner GetPackRunner(ILogger logger)
+    private static WindowsPackCommandRunner GetPackRunner(ILogger logger)
     {
         var console = new BasicConsole(logger, new VelopackDefaults(false));
         return new WindowsPackCommandRunner(logger, console);
@@ -198,6 +199,7 @@ public class WindowsPackTests
             TargetRuntime = RID.Parse("win-x64"),
             PackDirectory = tmpOutput,
             Shortcuts = "Desktop,StartMenuRoot",
+            NoPortable = true
         };
 
         var runner = GetPackRunner(logger);
@@ -206,7 +208,7 @@ public class WindowsPackTests
         var setupPath1 = Path.Combine(tmpReleaseDir, $"{id}-win-Setup.exe");
         Assert.True(File.Exists(setupPath1));
 
-        RunNoCoverage(setupPath1, new[] { "--silent", "--installto", tmpInstallDir }, Environment.CurrentDirectory, logger);
+        RunNoCoverage(setupPath1, ["--silent", "--installto", tmpInstallDir], Environment.CurrentDirectory, logger);
 
         var updatePath = Path.Combine(tmpInstallDir, "Update.exe");
         Assert.True(File.Exists(updatePath));
@@ -236,24 +238,23 @@ public class WindowsPackTests
         string installDate = null;
         string uninstallRegSubKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall";
         using (var key = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Default)
-            .CreateSubKey(uninstallRegSubKey + "\\" + id, RegistryKeyPermissionCheck.ReadWriteSubTree)) {
+                   .CreateSubKey(uninstallRegSubKey + "\\" + id, RegistryKeyPermissionCheck.ReadWriteSubTree)) {
             installDate = key.GetValue("InstallDate") as string;
         }
 
         var date = DateTime.Now.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         Assert.Equal(date, installDate.Trim('\0'));
 
-        var uninstOutput = RunNoCoverage(updatePath, new string[] { "--silent", "--uninstall" }, Environment.CurrentDirectory, logger);
+        var uninstOutput = RunNoCoverage(updatePath, ["--silent", "--uninstall"], Environment.CurrentDirectory, logger);
         Assert.EndsWith(Environment.NewLine + "Y", uninstOutput); // this checks that the self-delete succeeded
 
         Assert.False(File.Exists(startLnk));
         Assert.False(File.Exists(desktopLnk));
         Assert.False(File.Exists(appPath));
 
-        using (var key2 = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Default)
-            .OpenSubKey(uninstallRegSubKey + "\\" + id, RegistryKeyPermissionCheck.ReadSubTree)) {
-            Assert.Null(key2);
-        }
+        using var key2 = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Default)
+                   .OpenSubKey(uninstallRegSubKey + "\\" + id, RegistryKeyPermissionCheck.ReadSubTree);
+        Assert.Null(key2);
     }
 
     [SkippableFact]
@@ -271,8 +272,11 @@ public class WindowsPackTests
 
         // install app
         var setupPath1 = Path.Combine(releaseDir, $"{id}-win-Setup.exe");
-        RunNoCoverage(setupPath1, new string[] { "--silent", "--installto", installDir },
-            Environment.GetFolderPath(Environment.SpecialFolder.Desktop), logger);
+        RunNoCoverage(
+            setupPath1,
+            ["--silent", "--installto", installDir],
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+            logger);
 
         // pack v2
         PackTestApp(id, "2.0.0", "version 2 test", releaseDir, logger);
@@ -283,19 +287,19 @@ public class WindowsPackTests
         var mvTo = Path.Combine(installDir, "packages", fileName);
         File.Copy(mvFrom, mvTo);
 
-        RunCoveredDotnet(appPath, new string[] { "--autoupdate" }, installDir, logger, exitCode: null);
+        RunCoveredDotnet(appPath, ["--autoupdate"], installDir, logger, exitCode: null);
 
         Thread.Sleep(3000); // update.exe runs in separate process
 
-        var chk1version = RunCoveredDotnet(appPath, new string[] { "version" }, installDir, logger);
+        var chk1version = RunCoveredDotnet(appPath, ["version"], installDir, logger);
         Assert.EndsWith(Environment.NewLine + "2.0.0", chk1version);
     }
 
     [SkippableFact]
     public void TestPackGeneratesValidDelta()
     {
-        using var _1 = TempUtil.GetTempDirectory(out var releaseDir);
         Skip.IfNot(VelopackRuntimeInfo.IsWindows);
+        using var _1 = TempUtil.GetTempDirectory(out var releaseDir);
         using var logger = _output.BuildLoggerFor<WindowsPackTests>();
         string id = "SquirrelDeltaTest";
         PackTestApp(id, "1.0.0", "version 1 test", releaseDir, logger);
@@ -330,11 +334,12 @@ public class WindowsPackTests
 
         // apply delta and check package
         var output = Path.Combine(releaseDir, "delta.patched");
-        new DeltaPatchCommandRunner(logger, new BasicConsole(logger, new VelopackDefaults(false))).Run(new DeltaPatchOptions {
-            BasePackage = Path.Combine(releaseDir, $"{id}-1.0.0-full.nupkg"),
-            OutputFile = output,
-            PatchFiles = new[] { new FileInfo(deltaPath) },
-        }).GetAwaiterResult();
+        new DeltaPatchCommandRunner(logger, new BasicConsole(logger, new VelopackDefaults(false))).Run(
+            new DeltaPatchOptions {
+                BasePackage = Path.Combine(releaseDir, $"{id}-1.0.0-full.nupkg"),
+                OutputFile = output,
+                PatchFiles = [new FileInfo(deltaPath)],
+            }).GetAwaiterResult();
 
         // are the packages the same?
         Assert.True(File.Exists(output));
@@ -347,11 +352,12 @@ public class WindowsPackTests
         // can apply multiple deltas, and handle add/removing files?
         output = Path.Combine(releaseDir, "delta.patched2");
         var deltav3 = Path.Combine(releaseDir, $"{id}-3.0.0-delta.nupkg");
-        new DeltaPatchCommandRunner(logger, new BasicConsole(logger, new VelopackDefaults(false))).Run(new DeltaPatchOptions {
-            BasePackage = Path.Combine(releaseDir, $"{id}-1.0.0-full.nupkg"),
-            OutputFile = output,
-            PatchFiles = [new FileInfo(deltaPath), new FileInfo(deltav3)],
-        }).GetAwaiterResult();
+        new DeltaPatchCommandRunner(logger, new BasicConsole(logger, new VelopackDefaults(false))).Run(
+            new DeltaPatchOptions {
+                BasePackage = Path.Combine(releaseDir, $"{id}-1.0.0-full.nupkg"),
+                OutputFile = output,
+                PatchFiles = [new FileInfo(deltaPath), new FileInfo(deltav3)],
+            }).GetAwaiterResult();
 
         // are the packages the same?
         Assert.True(File.Exists(output));
@@ -377,8 +383,11 @@ public class WindowsPackTests
 
         // install app
         var setupPath1 = Path.Combine(releaseDir, $"{id}-win-Setup.exe");
-        RunNoCoverage(setupPath1, ["--installto", installDir],
-            Environment.GetFolderPath(Environment.SpecialFolder.Desktop), logger);
+        RunNoCoverage(
+            setupPath1,
+            ["--installto", installDir],
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+            logger);
 
         var argsPath = Path.Combine(installDir, "args.txt");
         Assert.True(File.Exists(argsPath));
@@ -426,8 +435,11 @@ public class WindowsPackTests
 
         // install app
         var setupPath1 = Path.Combine(releaseDir, $"{id}-win-Setup.exe");
-        RunNoCoverage(setupPath1, new string[] { "--silent", "--installto", installDir },
-            Environment.GetFolderPath(Environment.SpecialFolder.Desktop), logger);
+        RunNoCoverage(
+            setupPath1,
+            ["--silent", "--installto", installDir],
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+            logger);
 
         // check app installed correctly
         var appPath = Path.Combine(installDir, "current", "TestApp.exe");
@@ -439,11 +451,11 @@ public class WindowsPackTests
         logger.Info("TEST: v1 installed");
 
         // check app output
-        var chk1test = RunCoveredDotnet(appPath, new string[] { "test" }, installDir, logger);
+        var chk1test = RunCoveredDotnet(appPath, ["test"], installDir, logger);
         Assert.EndsWith(Environment.NewLine + "version 1 test", chk1test);
-        var chk1version = RunCoveredDotnet(appPath, new string[] { "version" }, installDir, logger);
+        var chk1version = RunCoveredDotnet(appPath, ["version"], installDir, logger);
         Assert.EndsWith(Environment.NewLine + "1.0.0", chk1version);
-        var chk1check = RunCoveredDotnet(appPath, new string[] { "check", releaseDir }, installDir, logger);
+        var chk1check = RunCoveredDotnet(appPath, ["check", releaseDir], installDir, logger);
         Assert.EndsWith(Environment.NewLine + "no updates", chk1check);
         logger.Info("TEST: v1 output verified");
 
@@ -451,7 +463,7 @@ public class WindowsPackTests
         PackTestApp(id, "2.0.0", "version 2 test", releaseDir, logger);
 
         // check can find v2 update
-        var chk2check = RunCoveredDotnet(appPath, new string[] { "check", releaseDir }, installDir, logger);
+        var chk2check = RunCoveredDotnet(appPath, ["check", releaseDir], installDir, logger);
         Assert.EndsWith(Environment.NewLine + "update: 2.0.0", chk2check);
         logger.Info("TEST: found v2 update");
 
@@ -464,17 +476,17 @@ public class WindowsPackTests
 
         // perform full update, check that we get v3
         // apply should fail if there's not an update downloaded
-        RunCoveredDotnet(appPath, new string[] { "apply", releaseDir }, installDir, logger, exitCode: -1);
-        RunCoveredDotnet(appPath, new string[] { "download", releaseDir }, installDir, logger);
-        RunCoveredDotnet(appPath, new string[] { "apply", releaseDir }, installDir, logger, exitCode: null);
+        RunCoveredDotnet(appPath, ["apply", releaseDir], installDir, logger, exitCode: -1);
+        RunCoveredDotnet(appPath, ["download", releaseDir], installDir, logger);
+        RunCoveredDotnet(appPath, ["apply", releaseDir], installDir, logger, exitCode: null);
         logger.Info("TEST: v3 applied");
 
         // check app output
-        var chk3test = RunCoveredDotnet(appPath, new string[] { "test" }, installDir, logger);
+        var chk3test = RunCoveredDotnet(appPath, ["test"], installDir, logger);
         Assert.EndsWith(Environment.NewLine + "version 3 test", chk3test);
-        var chk3version = RunCoveredDotnet(appPath, new string[] { "version" }, installDir, logger);
+        var chk3version = RunCoveredDotnet(appPath, ["version"], installDir, logger);
         Assert.EndsWith(Environment.NewLine + "3.0.0", chk3version);
-        var ch3check2 = RunCoveredDotnet(appPath, new string[] { "check", releaseDir }, installDir, logger);
+        var ch3check2 = RunCoveredDotnet(appPath, ["check", releaseDir], installDir, logger);
         Assert.EndsWith(Environment.NewLine + "no updates", ch3check2);
         logger.Info("TEST: v3 output verified");
 
@@ -492,7 +504,7 @@ public class WindowsPackTests
 
         // uninstall
         var updatePath = Path.Combine(installDir, "Update.exe");
-        RunNoCoverage(updatePath, new string[] { "--silent", "--uninstall" }, Environment.CurrentDirectory, logger);
+        RunNoCoverage(updatePath, ["--silent", "--uninstall"], Environment.CurrentDirectory, logger);
         logger.Info("TEST: uninstalled / complete");
     }
 
@@ -513,30 +525,37 @@ public class WindowsPackTests
 
         var setup = PathHelper.GetFixture(fixture);
         var p = Process.Start(setup);
-        p.WaitForExit();
+        p!.WaitForExit();
 
         var currentDir = Path.Combine(rootDir, origDirName);
         var appExe = Path.Combine(currentDir, "LegacyTestApp.exe");
         var updateExe = Path.Combine(rootDir, "Update.exe");
-        Assert.True(File.Exists(appExe));
-        Assert.True(File.Exists(updateExe));
+
+        var assertAppExe = appExe;
+        IoUtil.Retry(
+            () => {
+                Assert.True(File.Exists(assertAppExe));
+                Assert.True(File.Exists(updateExe));
+            },
+            retries: 10,
+            retryDelay: 1000);
 
         using var _1 = TempUtil.GetTempDirectory(out var releaseDir);
         PackTestApp("LegacyTestApp", "2.0.0", "hello!", releaseDir, logger);
 
-        RunNoCoverage(appExe, new string[] { "download", releaseDir }, currentDir, logger, exitCode: 0);
-        RunNoCoverage(appExe, new string[] { "apply", releaseDir }, currentDir, logger, exitCode: null);
+        RunNoCoverage(appExe, ["download", releaseDir], currentDir, logger, exitCode: 0);
+        RunNoCoverage(appExe, ["apply", releaseDir], currentDir, logger, exitCode: null);
 
         logger.Info("TEST: " + DateTime.Now.ToLongTimeString());
 
-        Thread.Sleep(5000); // update.exe runs in a separate process here
+        Thread.Sleep(10_000); // update.exe runs in a separate process here
 
         string logContents = ReadFileWithRetry(Path.Combine(rootDir, "Velopack.log"), logger);
         logger.Info("Velopack.log:" + Environment.NewLine + logContents);
         logger.Info("TEST: " + DateTime.Now.ToLongTimeString());
 
         if (origDirName != "current") {
-            Assert.True(!Directory.Exists(currentDir));
+            Assert.False(Directory.Exists(currentDir));
             currentDir = Path.Combine(rootDir, "current");
         }
 
@@ -550,15 +569,99 @@ public class WindowsPackTests
         // this is the file written by TestApp when it's detected the squirrel restart. if this is here, everything went smoothly.
         Assert.True(File.Exists(Path.Combine(rootDir, "restarted")));
 
-        var chk3version = RunNoCoverage(appExe, new string[] { "version" }, currentDir, logger);
+        var chk3version = RunNoCoverage(appExe, ["version"], currentDir, logger);
         Assert.EndsWith(Environment.NewLine + "2.0.0", chk3version);
+    }
+
+    [SkippableFact]
+    public async Task TestPackGeneratesMsi()
+    {
+        Skip.IfNot(VelopackRuntimeInfo.IsWindows);
+
+        using var logger = _output.BuildLoggerFor<WindowsPackTests>();
+
+        using var _1 = TempUtil.GetTempDirectory(out var tmpOutput);
+        using var _2 = TempUtil.GetTempDirectory(out var tmpReleaseDir);
+
+        var exe = "testapp.exe";
+        var pdb = Path.ChangeExtension(exe, ".pdb");
+        var id = "Test.Squirrel-App";
+        var version = "1.2.3";
+
+        PathHelper.CopyRustAssetTo(exe, tmpOutput);
+        PathHelper.CopyRustAssetTo(pdb, tmpOutput);
+
+        var options = new WindowsPackOptions {
+            EntryExecutableName = exe,
+            ReleaseDir = new DirectoryInfo(tmpReleaseDir),
+            PackId = id,
+            PackVersion = version,
+            TargetRuntime = RID.Parse("win-x64"),
+            PackDirectory = tmpOutput,
+            Shortcuts = "Desktop,StartMenuRoot",
+            BuildMsi = true
+        };
+
+        var runner = GetPackRunner(logger);
+        await runner.Run(options);
+
+        string msiPath = Path.Combine(tmpReleaseDir, $"{id}-win-DeploymentTool.msi");
+        Assert.True(File.Exists(msiPath));
+        using Database db = new Database(msiPath);
+        var msiVersion = db.ExecuteScalar("SELECT `Value` FROM `Property` WHERE `Property` = 'ProductVersion'") as string;
+        Assert.Equal("1.2.3.0", msiVersion);
+    }
+
+    [SkippableFact]
+    public async Task TestPackGeneratesMsiWithSpecifiedVersion()
+    {
+        Skip.IfNot(VelopackRuntimeInfo.IsWindows);
+
+        using var logger = _output.BuildLoggerFor<WindowsPackTests>();
+
+        using var _1 = TempUtil.GetTempDirectory(out var tmpOutput);
+        using var _2 = TempUtil.GetTempDirectory(out var tmpReleaseDir);
+
+        var exe = "testapp.exe";
+        var pdb = Path.ChangeExtension(exe, ".pdb");
+        var id = "Test.Squirrel-App";
+        var version = "1.0.0";
+
+        PathHelper.CopyRustAssetTo(exe, tmpOutput);
+        PathHelper.CopyRustAssetTo(pdb, tmpOutput);
+
+        var options = new WindowsPackOptions {
+            EntryExecutableName = exe,
+            ReleaseDir = new DirectoryInfo(tmpReleaseDir),
+            PackId = id,
+            PackVersion = version,
+            TargetRuntime = RID.Parse("win-x64"),
+            PackDirectory = tmpOutput,
+            Shortcuts = "Desktop,StartMenuRoot",
+            BuildMsi = true,
+            MsiVersionOverride = "4.5.6.1"
+        };
+
+        var runner = GetPackRunner(logger);
+        await runner.Run(options);
+
+        string msiPath = Path.Combine(tmpReleaseDir, $"{id}-win-DeploymentTool.msi");
+        Assert.True(File.Exists(msiPath));
+
+        using Database db = new Database(msiPath);
+        var msiVersion = db.ExecuteScalar("SELECT `Value` FROM `Property` WHERE `Property` = 'ProductVersion'") as string;
+        Assert.Equal("4.5.6.1", msiVersion);
     }
 
     private static string ReadFileWithRetry(string path, ILogger logger)
     {
-        return IoUtil.Retry(() => {
-            return File.ReadAllText(path);
-        }, logger: logger, retries: 10, retryDelay: 1000);
+        return IoUtil.Retry(
+            () => {
+                return File.ReadAllText(path);
+            },
+            logger: logger,
+            retries: 10,
+            retryDelay: 1000);
     }
 
     //private string RunCoveredRust(string binName, string[] args, string workingDir, ILogger logger, int? exitCode = 0)
@@ -587,7 +690,7 @@ public class WindowsPackTests
     //    return RunImpl(psi, logger, exitCode);
     //}
 
-    private string RunImpl(ProcessStartInfo psi, ILogger logger, int? exitCode = 0)
+    private static string RunImpl(ProcessStartInfo psi, ILogger logger, int? exitCode = 0)
     {
         //logger.Info($"TEST: Running {psi.FileName} {psi.ArgumentList.Aggregate((a, b) => $"{a} {b}")}");
         //using var p = Process.Start(psi);
@@ -621,9 +724,13 @@ public class WindowsPackTests
 
             logger.Info($"TEST: Process exited with code {p.ExitCode} in {elapsed.TotalSeconds}s");
 
-            using var fs = IoUtil.Retry(() => {
-                return File.Open(outputFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-            }, 10, 1000, logger);
+            using var fs = IoUtil.Retry(
+                () => {
+                    return File.Open(outputFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                },
+                10,
+                1000,
+                logger);
 
             using var reader = new StreamReader(fs);
             var output = reader.ReadToEnd();
@@ -638,12 +745,13 @@ public class WindowsPackTests
                 throw new Exception($"Process exited with code {p.ExitCode} but expected {exitCode.Value}");
             }
 
-            return String.Join(Environment.NewLine,
+            return String.Join(
+                Environment.NewLine,
                 output
                     .Split('\n')
                     .Where(l => !l.Contains("Code coverage results"))
                     .Select(l => l.Trim())
-                ).Trim();
+            ).Trim();
         } finally {
             try {
                 File.Delete(outputFile);
@@ -651,7 +759,7 @@ public class WindowsPackTests
         }
     }
 
-    private string RunCoveredDotnet(string exe, string[] args, string workingDir, ILogger logger, int? exitCode = 0)
+    private static string RunCoveredDotnet(string exe, string[] args, string workingDir, ILogger logger, int? exitCode = 0)
     {
         var outputfile = PathHelper.GetTestRootPath($"coverage.rundotnet.{RandomString(8)}.xml");
 
@@ -675,12 +783,14 @@ public class WindowsPackTests
         return RunImpl(psi, logger, exitCode);
     }
 
-    private static Random _random = new Random();
+    private static readonly Random _random = Random.Shared;
+
     private static string RandomString(int length)
     {
         string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".ToLower();
-        return new string(Enumerable.Repeat(chars, length)
-            .Select(s => s[_random.Next(s.Length)]).ToArray());
+        return new string(
+            Enumerable.Repeat(chars, length)
+                .Select(s => s[_random.Next(s.Length)]).ToArray());
     }
 
     private string RunNoCoverage(string exe, string[] args, string workingDir, ILogger logger, int? exitCode = 0)
@@ -697,7 +807,7 @@ public class WindowsPackTests
         return RunImpl(psi, logger, exitCode);
     }
 
-    private void PackTestApp(string id, string version, string testString, string releaseDir, ILogger logger, bool addNewFile = false)
+    private static void PackTestApp(string id, string version, string testString, string releaseDir, ILogger logger, bool addNewFile = false)
     {
         var projDir = PathHelper.GetTestRootPath("TestApp");
         var testStringFile = Path.Combine(projDir, "Const.cs");

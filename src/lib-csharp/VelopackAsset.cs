@@ -15,7 +15,13 @@ namespace Velopack
         /// <summary> A full update package. </summary>
         Full = 1,
         /// <summary> A delta update package. </summary>
-        Delta,
+        Delta = 2,
+        /// <summary> A portable application zip archive. </summary>
+        Portable = 3,
+        /// <summary> An application installer archive. </summary>
+        Installer = 4,
+        /// <summary> A Windows Installer package (.msi) for the deployment tool.</summary>
+        MsiDeploymentTool = 5
     }
 
     /// <summary>
@@ -57,7 +63,7 @@ namespace Velopack
         /// <summary> The SHA1 checksum of the update package containing this release. </summary>
         public string SHA1 { get; set; }
 
-        /// <summary> The SHA256 checksum (if availible) of the update package containing this release. </summary>
+        /// <summary> The SHA256 checksum (if available) of the update package containing this release. </summary>
         public string SHA256 { get; set; }
 
         /// <summary> The size in bytes of the update package containing this release. </summary>

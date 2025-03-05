@@ -1,6 +1,7 @@
 ﻿using ELFSharp.ELF;
 using Microsoft.Extensions.Logging;
-using Velopack.Packaging.Abstractions;
+using Velopack.Core;
+using Velopack.Core.Abstractions;
 using Velopack.Util;
 
 namespace Velopack.Packaging.Unix.Commands;
@@ -30,6 +31,7 @@ public class LinuxPackCommandRunner : PackageBuilder<LinuxPackOptions>
             var icon = Options.Icon ?? HelperFile.GetDefaultAppIcon(RuntimeOs.Linux);
             var iconFilename = Options.PackId + Path.GetExtension(icon);
             File.Copy(icon, Path.Combine(dir.FullName, iconFilename), true);
+            File.Copy(icon, Path.Combine(dir.FullName, ".DirIcon"), true);
 
             var categories = String.IsNullOrWhiteSpace(Options.Categories)
                 ? "Utility"
@@ -67,6 +69,7 @@ public class LinuxPackCommandRunner : PackageBuilder<LinuxPackOptions>
                     [Desktop Entry]
                     Type=Application
                     Name={Options.PackTitle ?? Options.PackId}
+                    X-AppImage-Version={Options.PackVersion}
                     Comment={Options.PackTitle ?? Options.PackId} {Options.PackVersion}
                     Icon={Options.PackId}
                     Exec={mainExeName}

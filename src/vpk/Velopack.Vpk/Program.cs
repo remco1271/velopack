@@ -5,17 +5,20 @@ using Microsoft.Extensions.Hosting;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
+using Velopack.Core;
+using Velopack.Core.Abstractions;
 using Velopack.Deployment;
-using Velopack.Packaging.Abstractions;
+using Velopack.Flow;
+using Velopack.Flow.Commands;
 using Velopack.Packaging.Commands;
 using Velopack.Packaging.Exceptions;
-using Velopack.Packaging.Flow;
 using Velopack.Packaging.Unix.Commands;
 using Velopack.Packaging.Windows.Commands;
 using Velopack.Util;
 using Velopack.Vpk.Commands;
 using Velopack.Vpk.Commands.Deployment;
 using Velopack.Vpk.Commands.Flow;
+using Velopack.Vpk.Commands.Packaging;
 using Velopack.Vpk.Converters;
 using Velopack.Vpk.Logging;
 using Velopack.Vpk.Updates;
@@ -94,8 +97,7 @@ public class Program
 
         SetupConfig(builder);
         SetupLogging(builder, verbose, legacyConsole);
-        SetupVelopackService(builder.Services);
-
+        
         RuntimeOs targetOs = VelopackRuntimeInfo.SystemOs;
         if (new bool[] { directiveWin, directiveLinux, directiveOsx }.Count(x => x) > 1) {
             throw new UserInfoException(
@@ -207,15 +209,6 @@ public class Program
 
         Log.Logger = conf.CreateLogger();
         builder.Logging.AddSerilog();
-    }
-
-    private static void SetupVelopackService(IServiceCollection services)
-    {
-        services.AddSingleton<IVelopackFlowServiceClient, VelopackFlowServiceClient>();
-        services.AddSingleton<HmacAuthHttpClientHandler>();
-        services.AddHttpClient().ConfigureHttpClientDefaults(x => 
-            x.AddHttpMessageHandler<HmacAuthHttpClientHandler>()
-                .ConfigureHttpClient(httpClient => httpClient.Timeout = TimeSpan.FromMinutes(60)));
     }
 }
 

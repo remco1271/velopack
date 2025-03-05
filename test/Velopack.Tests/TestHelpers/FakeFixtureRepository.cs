@@ -1,13 +1,13 @@
 ﻿#pragma warning disable CS0618 // Type or member is obsolete
 #pragma warning disable CS0612 // Type or member is obsolete
 using System.Text;
-using Velopack.Packaging;
+using Velopack.Core;
 using Velopack.Sources;
 using Velopack.Util;
 
 namespace Velopack.Tests.TestHelpers;
 
-internal class FakeFixtureRepository : Sources.IFileDownloader
+internal class FakeFixtureRepository : IFileDownloader
 {
     private readonly string _pkgId;
     private readonly IEnumerable<ReleaseEntry> _releases;
@@ -39,13 +39,14 @@ internal class FakeFixtureRepository : Sources.IFileDownloader
                 var name = new ReleaseEntryName(maxfullVer.PackageId, maxDeltaVer.Version, false);
                 releases.Add(new ReleaseEntry("0000000000000000000000000000000000000000", name.ToFileName(), maxfullVer.Filesize));
 
-                releasesNew.Add(new VelopackAsset {
-                    PackageId = maxfullVer.PackageId,
-                    Version = maxDeltaVer.Version,
-                    Type = VelopackAssetType.Full,
-                    FileName = $"{maxfullVer.PackageId}-{maxDeltaVer.Version}-full.nupkg",
-                    Size = maxfullVer.Filesize,
-                });
+                releasesNew.Add(
+                    new VelopackAsset {
+                        PackageId = maxfullVer.PackageId,
+                        Version = maxDeltaVer.Version,
+                        Type = VelopackAssetType.Full,
+                        FileName = $"{maxfullVer.PackageId}-{maxDeltaVer.Version}-full.nupkg",
+                        Size = maxfullVer.Filesize,
+                    });
             }
         }
 
@@ -55,7 +56,7 @@ internal class FakeFixtureRepository : Sources.IFileDownloader
         _releases = releases;
     }
 
-    public Task<byte[]> DownloadBytes(string url, string authorization = null, string accept = null)
+    public Task<byte[]> DownloadBytes(string url, string authorization = null, string accept = null, double timeout = 30)
     {
         if (url.Contains($"/{_releasesName}?")) {
             MemoryStream ms = new MemoryStream();
@@ -80,7 +81,8 @@ internal class FakeFixtureRepository : Sources.IFileDownloader
         return Task.FromResult(File.ReadAllBytes(filePath));
     }
 
-    public Task DownloadFile(string url, string targetFile, Action<int> progress, string authorization = null, string accept = null, CancellationToken token = default)
+    public Task DownloadFile(string url, string targetFile, Action<int> progress, string authorization = null, string accept = null, double timeout = 30,
+        CancellationToken token = default)
     {
         var rel = _releases.FirstOrDefault(r => url.EndsWith(r.OriginalFilename));
         var filePath = PathHelper.GetFixture(rel.OriginalFilename);
@@ -96,7 +98,7 @@ internal class FakeFixtureRepository : Sources.IFileDownloader
         return Task.CompletedTask;
     }
 
-    public Task<string> DownloadString(string url, string authorization = null, string accept = null)
+    public Task<string> DownloadString(string url, string authorization = null, string accept = null, double timeout = 30)
     {
         if (url.Contains($"/{_releasesName}?")) {
             MemoryStream ms = new MemoryStream();

@@ -4,9 +4,9 @@ using Gitea.Net.Api;
 using Gitea.Net.Client;
 using Gitea.Net.Model;
 using Microsoft.Extensions.Logging;
+using Velopack.Core;
 using Velopack.NuGet;
 using Velopack.Packaging;
-using Velopack.Packaging.Exceptions;
 using Velopack.Sources;
 using Velopack.Util;
 
@@ -40,6 +40,7 @@ public class GiteaUploadOptions : GiteaDownloadOptions
 
     public bool Merge { get; set; }
 }
+
 public class GiteaRepository : SourceRepository<GiteaDownloadOptions, GiteaSource>, IRepositoryCanUpload<GiteaUploadOptions>
 {
     public GiteaRepository(ILogger logger) : base(logger)
@@ -79,8 +80,9 @@ public class GiteaRepository : SourceRepository<GiteaDownloadOptions, GiteaSourc
         var uri = new Uri(options.RepoUrl);
         var baseUri = uri.GetLeftPart(System.UriPartial.Authority);
         config.BasePath = baseUri + "/api/v1";
+        config.Timeout = (int)TimeSpan.FromMinutes(options.Timeout).TotalMilliseconds;
 
-        Log.Info($"Preparing to upload {build.Files.Count} asset(s) to Gitea");
+        Log.Info($"Preparing to upload {build.Count} asset(s) to Gitea");
 
         // Set token if provided
         if (!string.IsNullOrWhiteSpace(options.Token)) {
@@ -95,9 +97,6 @@ public class GiteaRepository : SourceRepository<GiteaDownloadOptions, GiteaSourc
             // Get all releases
             var allReleases = await apiInstance.RepoListReleasesWithHttpInfoAsync(repoOwner, repoName, page: 1, limit: (int) repositoryInfo.Data.ReleaseCounter);
             existingReleases = allReleases.Data;
-            if (allReleases != null && allReleases.StatusCode == HttpStatusCode.OK && allReleases.Data.Any(r => r.Name == releaseName)) {
-                throw new UserInfoException($"There is already an existing release named '{releaseName}'. Please delete this release or provide a new release name.");
-            }
         } else {
             throw new UserInfoException("Could not get all releases from server");
         }
@@ -111,7 +110,7 @@ public class GiteaRepository : SourceRepository<GiteaDownloadOptions, GiteaSourc
             }
         }
 
-        // create or retrieve github release
+        // create or retrieve gitea release
         var release = existingReleases.FirstOrDefault(r => r.TagName == semVer.ToString())
             ?? existingReleases.FirstOrDefault(r => r.Name == releaseName); ;
 
@@ -140,7 +139,7 @@ public class GiteaRepository : SourceRepository<GiteaDownloadOptions, GiteaSourc
         }
 
         // upload all assets (incl packages)
-        foreach (var a in build.Files) {
+        foreach (var a in build.GetFilePaths()) {
             await RetryAsync(() => UploadFileAsAsset(apiInstance, release, repoOwner, repoName, a), $"Uploading asset '{Path.GetFileName(a)}'..");
         }
 
@@ -153,7 +152,7 @@ public class GiteaRepository : SourceRepository<GiteaDownloadOptions, GiteaSourc
             await apiInstance.RepoCreateReleaseAttachmentAsync(repoOwner, repoName, release.Id, releasesFileName, new MemoryStream(Encoding.UTF8.GetBytes(json)));
         }, "Uploading " + releasesFileName);
 
-        if (options.Channel == ReleaseEntryHelper.GetDefaultChannel(RuntimeOs.Windows)) {
+        if (options.Channel == DefaultName.GetDefaultChannel(RuntimeOs.Windows)) {
             var legacyReleasesContent = ReleaseEntryHelper.GetLegacyMigrationReleaseFeedString(feed);
             var legacyReleasesBytes = Encoding.UTF8.GetBytes(legacyReleasesContent);
             await RetryAsync(async () => {

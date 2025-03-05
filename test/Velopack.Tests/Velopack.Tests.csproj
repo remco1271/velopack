@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
-  
+
   <PropertyGroup>
     <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
@@ -19,11 +19,11 @@
   </Choose>
 
   <ItemGroup>
-    <Compile Include="..\..\src\vpk\Velopack.Packaging\SimpleJson.cs" Link="SimpleJson.cs" />
+    <Compile Include="..\..\src\vpk\Velopack.Core\SimpleJson.cs" Link="SimpleJson.cs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.IO.Packaging" Version="8.0.1" />
+    <PackageReference Include="System.IO.Packaging" Version="9.0.2"/>
   </ItemGroup>
 
   <ItemGroup Condition=" $(TargetFramework.StartsWith('net4')) ">

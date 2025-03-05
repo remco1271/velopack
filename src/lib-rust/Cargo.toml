@@ -26,6 +26,9 @@ features = ["async", "delta"]
 name = "velopack"
 path = "src/lib.rs"
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [dependencies]
 log.workspace = true
 ureq.workspace = true
@@ -43,9 +46,9 @@ regex.workspace = true
 normpath.workspace = true
 bitflags.workspace = true
 rand.workspace = true
-native-tls.workspace = true
 sha1.workspace = true
 sha2.workspace = true
+uuid.workspace = true
 
 # typescript
 ts-rs = { workspace = true, optional = true }
@@ -55,3 +58,9 @@ zstd = { workspace = true, optional = true }
 
 # async
 async-std = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Storage", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

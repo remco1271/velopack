@@ -1,4 +1,4 @@
-name: Publish to NuGet.org
+name: Publish Release
 
 on:
   workflow_dispatch:
@@ -50,24 +50,36 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ./lib-rust
 
+      - name: Download lib-c
+        uses: actions/download-artifact@v4
+        with:
+          name: lib-c
+          run-id: ${{ github.event.inputs.workflow_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ./lib-c-files
+
       - name: Load version from file
         run: |
           version=$(cat version.txt | xargs)
           echo "PKG_VERSION=$version" >> $GITHUB_ENV
+
+      - name: Create lib-c zip package
+        working-directory: ./lib-c-files
+        run: |
+          mkdir -p ../lib-c
+          zip -r ../lib-c/velopack_libc_$PKG_VERSION.zip .
 
       - uses: actions/checkout@v4
         with:
           path: ./repo
           fetch-depth: 0
           
-      - name: Tag the commit with version and push
+      - name: Checkout release commit
         working-directory: ./repo
         run: |
           echo $PKG_VERSION
           COMMIT_HASH=$(gh run view ${{ github.event.inputs.workflow_run_id }} --json headSha -q ".headSha")
           git checkout $COMMIT_HASH
-          git tag $PKG_VERSION
-          git push origin $PKG_VERSION
 
       - name: Generate Release
         working-directory: ./repo
@@ -80,21 +92,57 @@ jobs:
 
           # Get the previous release tag
           Write-Host "Detecting previous release tag..."
-          if ($currentTag -like "*-*") {
-          # For prerelease versions, retain the full tag for output
-              $previousTag = git tag --list | Where-Object { $_ -like "*-*" } | 
-                  ForEach-Object { 
-                      $versionPart = $_.Split('-')[0]
-                      [PSCustomObject]@{ FullTag = $_; Version = [System.Version]$versionPart }
-                  } | Sort-Object Version -Descending | Select-Object -Skip 1 -First 1 | ForEach-Object { $_.FullTag }
+          $gitTags = git tag --list
+
+          $tags = $gitTags | ForEach-Object {
+              $fullTag = $_
+              $isPrerelease = $fullTag -like "*-*"
+
+              if ($isPrerelease) {
+                  # For prerelease versions, extract the version part before the hyphen
+                  $versionPart = $fullTag.Split('-')[0]
+              } else {
+                  $versionPart = $fullTag
+              }
+
+              try {
+                  $version = [System.Version]$versionPart
+                  [PSCustomObject]@{
+                      FullTag = $fullTag
+                      Version = $version
+                      IsPrerelease = $isPrerelease
+                  }
+              } catch {
+                  # Skip tags that cannot be parsed into a System.Version
+                  $null
+              }
+          } | Where-Object { $_ -ne $null }
+
+          $isCurrentPrerelease = $currentTag -like "*-*"
+          $latestPrerelease = ($tags | Where-Object { $_.IsPrerelease } | Sort-Object Version -Descending | Select-Object -First 1).FullTag
+          $latestStable = ($tags | Where-Object { -not $_.IsPrerelease } |  Sort-Object Version -Descending | Select-Object -First 1).FullTag
+          $latestOverall = ($tags | Sort-Object Version -Descending | Select-Object -First 1).FullTag
+
+          if ($isCurrentPrerelease) {
               $releaseArg = "--prerelease"
+              $previousTag = $latestOverall
           } else {
-              $previousTag = git tag --list | Where-Object { $_ -notlike "*-*" } | %{ [System.Version]$_ } | Sort-Object -Descending | Select-Object -Skip 1 -First 1
               $releaseArg = "--latest"
+              $previousTag = $latestStable
           }
 
+          Write-Host "Current version is prerelease: $isCurrentPrerelease"
+          Write-Host "Latest prerelease: $latestPrerelease"
+          Write-Host "Latest stable: $latestStable"
+          Write-Host "Latest overall: $latestOverall"
+          Write-Host "---"
           Write-Host "Current tag: $currentTag"
           Write-Host "Previous tag: $previousTag"
+
+          # Push the tag to the repository
+          Write-Host "Tagging release commit..."
+          git tag $currentTag
+          git push origin $currentTag
 
           # Generate release notes
           Write-Host "Generating release notes..."
@@ -112,23 +160,54 @@ jobs:
           $releaseName = $response.name
           $releaseBody = $response.body
 
+          # Move dependencies to dedicated section
+          $lines = $releaseBody -split "`n"
+          $dependenciesLines = @()
+          $otherLines = @()
+          $changelog = ""
+
+          foreach ($line in $lines) {
+              if ($line -match 'Full Changelog') {
+                  $changelog = $line
+              } elseif ($line -match '@renovate') {
+                  $dependenciesLines += $line
+              } else {
+                  $otherLines += $line
+              }
+          }
+
+          $releaseBody = $otherLines -join "`n"
+          if ($dependenciesLines.Count -gt 0) {
+              $releaseBody += "`## Dependency Updates`n"
+              $releaseBody += "`n<details>`n"
+              $releaseBody += "`n<summary>Expand to see all changed dependencies</summary>`n`n"
+              $releaseBody += $dependenciesLines -join "`n"
+              $releaseBody += "`n`n</details>`n"
+          }
+          $releaseBody += "`n" + $changelog
+
+          Write-Host "Release name: $releaseName"
+          Write-Host "Release body:"
+          Write-Host $releaseBody
+
           # Create release
           Write-Host "Creating release..."
           $notesFilePath = "./RELEASE_NOTES.md"
           $releaseBody | Out-File -FilePath $notesFilePath -Encoding utf8
           gh release create $currentTag --title $releaseName --notes-file $notesFilePath $releaseArg --verify-tag
-          
+
+          # Upload artifacts
+          Write-Host "Uploading artifacts..."
+          gh release upload $currentTag (get-item ../packages/*.nupkg)
+          gh release upload $currentTag (get-item ../lib-nodejs/*.tgz)
+          gh release upload $currentTag (get-item ../lib-rust/*.crate)
+          gh release upload $currentTag (get-item ../lib-c/*.zip)
+
       - name: Publish NuGet Packages
         run: |
           for f in packages/*.nupkg; do
             dotnet nuget push "$f" -k ${{ secrets.NUGET_API_KEY }} -s https://api.nuget.org/v3/index.json --skip-duplicate
           done
-          
-#      - name: Publish Rust Crate
-#        working-directory: ./lib-rust
-#        run: |
-#          PKG_VERSION=$(cat version.txt)
-#          curl -X PUT --user caesay:${{ secrets.CARGO_TOKEN }} --upload-file velopack-$(PKG_VERSION).crate https://crates.io/api/v1/crates/new
           
       - name: Publish NPM Package
         working-directory: ./lib-nodejs

@@ -4,10 +4,10 @@ members = [
     "src/bins",
     "src/lib-rust",
     "src/lib-nodejs/velopack_nodeffi",
+    "src/lib-cpp",
 ]
 exclude = [
     "samples/RustIced",
-    "src/lib-cpp/generator"
 ]
 
 [workspace.package]
@@ -25,8 +25,8 @@ rust-version = "1.75"
 [workspace.dependencies]
 velopack = { path = "src/lib-rust" }
 log = "0.4"
-native-tls = "0.2"
-ureq = { version = "2.10", default-features = false, features = ["native-tls", "gzip"] }
+log-derive = "0.4.1"
+ureq = "3.0"
 url = "2.5"
 semver = "1.0"
 xml = "0.8"
@@ -35,12 +35,12 @@ glob = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
-thiserror = "1.0"
+thiserror = "2.0"
 lazy_static = "1.5"
 regex = "1.10"
 normpath = "1.3"
 bitflags = "2.6"
-rand = "0.8"
+rand = "0.9"
 ts-rs = "10.0"
 zstd = "0.13"
 async-std = "1.13"
@@ -50,10 +50,10 @@ simplelog = "0.12"
 clap = "4.5"
 chrono = "0.4"
 wait-timeout = "0.2"
-strum = { version = "0.26", features = ["derive"] }
-file-rotate = "0.7"
+strum = { version = "0.27", features = ["derive"] }
+file-rotate = "0.8"
 simple-stopwatch = "0.1"
-enum-flags = "0.3"
+enum-flags = "0.4"
 remove_dir_all = { git = "https://github.com/caesay/remove_dir_all.git", features = ["log"] }
 sha1 = "0.10"
 sha2 = "0.10"
@@ -65,7 +65,6 @@ winres = "0.1"
 tempfile = "3.9"
 ntest = "0.9"
 pretty_assertions = "1.4"
-native-dialog = "0.7"
 waitpid-any = "0.2"
 dialog = "0.3"
 libc = "0.2"
@@ -76,6 +75,14 @@ filelocksmith = "0.1"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png"] }
 fs_extra = "1.3"
 memmap2 = "0.9"
+windows = "0.60"
+webview2-com-sys = "0.36"
+winsafe = { version = "0.0.20", features = ["gui"] }
+cbindgen = "0.28"
+log-panics = "2.1.0"
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+uuid = { version = "1.13.1", features = ["v4", "fast-rng", "macro-diagnostics"] }
 
 # default to small, optimized workspace release binaries
 [profile.release]
