@@ -88,7 +88,8 @@ public class CodeSign
             if (VelopackRuntimeInfo.IsWindows) {
                 filesToSignStr = String.Join(" ", filesToSign.Select(f => $"\"{f}\""));
             } else {
-                filesToSignStr = String.Join(" ", filesToSign.Select(f => $"'{f.Replace("'", "'\\''")}'"));
+                // For Linux: use single quotes wrapped in double-quote escapes for bash
+                filesToSignStr = String.Join(" ", filesToSign.Select(f => $"'{f}'"));
             }
 
             string command;
