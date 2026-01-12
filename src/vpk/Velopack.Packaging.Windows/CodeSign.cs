@@ -90,6 +90,7 @@ public class CodeSign
             } else {
                 // For Linux: use double quotes and escape special characters for bash
                 filesToSignStr = String.Join(" ", filesToSign.Select(f => $"'{EscapeForBash(f)}'"));
+                signArguments = EscapeForBash(signArguments);
             }
 
             string command;
@@ -124,7 +125,6 @@ public class CodeSign
 
         if (!VelopackRuntimeInfo.IsWindows) {
             fileName = "/bin/bash";
-            // Don't escape quotes - they're already escaped properly in the command
             args = $"-c \"{command} >> \\\"{signLogFile}\\\" 2>&1\"";
         }
 
