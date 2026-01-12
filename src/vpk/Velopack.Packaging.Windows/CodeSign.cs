@@ -89,7 +89,7 @@ public class CodeSign
                 filesToSignStr = String.Join(" ", filesToSign.Select(f => $"\"{f}\""));
             } else {
                 // For Linux: use double quotes and escape special characters for bash
-                filesToSignStr = String.Join(" ", filesToSign.Select(f => $"'{EscapeForBash(f)}'"));
+                filesToSignStr = String.Join(" ", filesToSign.Select(f => $"'{f}'"));
                 signArguments = EscapeForBash(signArguments);
             }
 
