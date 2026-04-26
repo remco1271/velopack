@@ -4,7 +4,7 @@ on:
 
 jobs:
   windows:
-    runs-on: blacksmith-8vcpu-windows-2025
+    runs-on: windows-2025
     env:
       RUSTFLAGS: -C target-feature=+crt-static
     steps:
